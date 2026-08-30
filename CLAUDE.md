@@ -12,15 +12,16 @@ Web UI経由でAIエージェントに任せられるツール。自宅Proxmox V
 ## コンポーネント構成(詳細は docs/architecture.md)
 
 ```
-apps/web              Next.js: フロントエンド + BFF/オーケストレータ
-apps/mcp-proxmox        Proxmox MCPサーバー(read/write/destructive risk tier + 承認ゲート)
-apps/mcp-tasks           タスク管理MCPサーバー
-packages/db                Drizzle + SQLite 共有データ層(tasks / approvals / audit_log)
-packages/agent-adapters   AIプロバイダー共通アダプター層(Claude Code / Gemini CLI / Codex CLI)
-packages/shared-types      共有の型・zodスキーマ
+apps/web              Next.js: フロントエンド + BFF/オーケストレータ                [未実装]
+apps/mcp-proxmox        Proxmox MCPサーバー(read/write/destructive risk tier + 承認ゲート) [実装済み・実機テスト済み]
+apps/mcp-tasks           タスク管理MCPサーバー                                    [実装済み・実機テスト済み]
+packages/db                Drizzle + SQLite 共有データ層(tasks / approvals / audit_log) [実装済み]
+packages/agent-adapters   AIプロバイダー共通アダプター層                          [ClaudeCodeAdapterのみ実装、Gemini/Codexはスタブ]
+packages/shared-types      共有の型・zodスキーマ                                 [実装済み]
 ```
 
-pnpm workspaceによるモノレポ構成。TypeScript strict モードを全パッケージで有効にする。
+pnpm workspaceによるモノレポ構成。TypeScript strict モードを全パッケージで有効にする
+(ただし`exactOptionalPropertyTypes`はzodの`.optional()`型推論との相性が悪いため無効化。docs/architecture.md 7節参照)。
 
 ## 絶対に守る設計原則
 
@@ -30,7 +31,8 @@ pnpm workspaceによるモノレポ構成。TypeScript strict モードを全パ
    - 実際のガードは常に `mcp-proxmox` 側のツール単位のrisk tierで一元的に強制する
 3. **write / destructive操作はfast-return + `approval_check`による再開方式で承認を挟む**(docs/architecture.md 2.3節)
    - MCPツール呼び出し自体を数分単位でブロックしない(CLI側タイムアウトに引っかかるため)
-   - `approved` かつ `executed_at` 未設定のときのみ実際にPVE APIを実行し、以降は保存済み結果を返す(冪等性を必ず担保する)
+   - `approved` かつ `executed_at` 未設定のときのみ(`executed_at IS NULL`条件のcompare-and-swapで実行権を確保してから)実際にPVE APIを実行し、以降は保存済み結果を返す(冪等性を必ず担保する)
+   - 実行が失敗した場合も結果(`{ok:false, error}`)を必ず保存する。保存し損ねると以降の`approval_check`が実行済み扱いのままpendingを返し続ける不整合になる(apps/mcp-proxmoxで実機確認済み)
 4. **AIプロバイダーのAPIキーを `.env` や設定ファイルに置かない**。各CLIのサブスクリプションログイン(`claude login` 等)に委ねる
 5. **PVE APIトークンは専用の制限ロールを使う**。アプリ側のrisk tier制御はPVE側ACLの代替ではなく多層防御として扱う
 6. **公開前提のリポジトリ**。`.env*`・生成されたMCP設定・SQLiteファイルはコミットしない(`.gitignore`済み)。テンプレート(`*.example`)のみコミットする

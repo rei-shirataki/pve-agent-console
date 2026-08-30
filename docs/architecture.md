@@ -8,6 +8,11 @@
 Proxmox VE運用に関するタスク(障害調査・構成変更・VM/LXCライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるようにする。自宅Proxmox VE(LXC構成)を対象とし、就活ポートフォリオとしてGitHub公開する。
 
+### 実装状況(2026-08-30時点)
+
+- 実装済み: `packages/shared-types`, `packages/db`(スキーマ・マイグレーション), `packages/agent-adapters`(ClaudeCodeAdapterのみ動作、Gemini/Codexは未実装のスタブ), `apps/mcp-tasks`, `apps/mcp-proxmox`(risk tier別ツール + 承認ゲート)。いずれも実際にMCPクライアントから接続してツール呼び出しの疎通を確認済み(read/write/承認/冪等再実行すべて実機テスト済み。PVE本体への接続は未検証)
+- 未実装: `apps/web`(フロントエンド + BFF/オーケストレータ)。次セッションの着手対象
+
 ## 1. 全体構成
 
 ```
@@ -103,8 +108,8 @@ type AgentEvent =
 4. エージェントは`approval_check(approvalId)`という共通ツール(全ゲート対象ツールで共用)を呼ぶ。このツールは内部で最大20〜30秒程度の短いポーリングを行い、状態変化を待つ:
    - `pending`のまま → `{ status: "pending" }`を返す。エージェントはユーザーに承認待ちである旨を伝えてターンを終える
    - `rejected` → 却下理由付きでエラー相当の結果を返す
-   - `approved`かつ`executed_at`が未設定 → ここで初めてPVE APIを実際に実行し、結果を`approvals`テーブルに保存、`executed_at`を設定してから結果を返す(**この分岐でのみ実行**することで、リトライ・タイムアウト後の再呼び出しが二重にPVE操作を発生させないことを保証する = 冪等性)
-   - `approved`かつ`executed_at`が設定済み → 保存済みの結果をそのまま返す(再実行しない)
+   - `approved`かつ`executed_at`が未設定 → `executed_at IS NULL`を条件にした compare-and-swap 更新でまず実行権を確保し(取れなかった場合は他プロセスが実行中とみなし結果が書き込まれるまで待つ)、確保できたプロセスだけがPVE APIを実際に実行する。**成功・失敗いずれの場合も**結果(`{ok:true,value}`または`{ok:false,error}`)を`resultJson`に保存してから返す(この分岐でのみ実行することで、リトライ・タイムアウト後の再呼び出しが二重にPVE操作を発生させないことを保証する = 冪等性。失敗時も記録することで、以降の`approval_check`が実行済み扱いのまま結果を返せずpendingを返し続ける不整合を防ぐ)
+   - `approved`かつ`executed_at`が設定済み → 保存済みの結果(成功なら`approved`、失敗なら`rejected`+理由)をそのまま返す(再実行しない)。実装・実機での動作確認は `apps/mcp-proxmox` で完了済み
 5. `apps/web`は`approvals`テーブルをポーリングし、pendingが増えたらSSEでブラウザに通知。ユーザーがWeb UIで承認/却下すると`approvals`テーブルの`status`を更新する
 6. ユーザーの承認がエージェントのターン終了後に行われた場合、`apps/web`は承認完了をトリガーに対象タスクのエージェントセッションを再開する(2.1節)。再開時のプロンプトで`approval_check(approvalId)`の再呼び出しを促す
 7. `audit_log`テーブルに「誰が(ユーザー) / いつ / 何を承認・却下したか / 実際に実行された結果」を記録する
@@ -167,7 +172,13 @@ interface Task {
 
 ## 7. 未確定・実装時に確認が必要な事項
 
-- Gemini CLI / Codex CLIの非対話モードの具体的なCLIフラグ、MCP設定ファイル形式、セッション再開機能の有無
-- Claude Codeの`-p --output-format stream-json`使用時に`--verbose`が必須かどうか
-- 各CLIのMCP transportサポート状況(stdio/HTTP)
+- Gemini CLI / Codex CLIの非対話モードの具体的なCLIフラグ、MCP設定ファイル形式、セッション再開機能の有無(このホストに両CLIが未インストールのため未検証。`packages/agent-adapters`の`GeminiCliAdapter`/`CodexCliAdapter`は未実装のスタブ)
+- 各CLIのMCP transportサポート状況(stdio/HTTP)。ClaudeCodeAdapterは`--mcp-config`にstdioサーバー定義のJSONファイルを渡す想定で実装済みだが、実際のMCP設定ファイルを使った`claude`本番起動(mcp-proxmox/mcp-tasksをMCPサーバーとして接続した状態)はまだ実施していない(MCPクライアント経由の単体疎通確認のみ実施済み)
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
+
+### 実装時に行った判断(設計時点から変更・追加した点)
+
+- `tsconfig.base.json`の`exactOptionalPropertyTypes`は当初trueにしていたが、zodの`.optional()`推論型との相性が悪く(値がundefinedのプロパティを許容できない)全体で頻発するため無効化した。`strict`/`noUncheckedIndexedAccess`は維持
+- TypeScriptは`5.9.3`を採用(`npm view typescript version`時点の最新は`7.0.2`だが、ネイティブ移植版でエコシステム互換性が未成熟なため見送った)
+- SQLiteドライバは`drizzle-orm`が`node:sqlite`向けドライバを提供していなかったため`better-sqlite3`を採用(このホストでは追加のビルドツールなしにネイティブバインディングが解決できることを確認済み)
+- 承認ゲートの実行権確保(compare-and-swap)は`executed_at IS NULL`条件のUPDATEで行い、実行結果は成功・失敗いずれも`{ok, value|error}`の形でJSON保存する。失敗時に記録し損ねると、以降の`approval_check`が実行済み扱いのままpendingを返し続ける不整合が起きるため、この失敗記録は省略不可(実機テストで確認済み)
