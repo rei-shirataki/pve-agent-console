@@ -16,7 +16,8 @@ Web UI経由でAIエージェントに任せられるようにする。自宅Pro
   - `apps/mcp-proxmox`の承認フロー(pending→approved→冪等な再実行、失敗の記録と再利用)
   - Claude Code CLI(`claude -p --mcp-config ...`)から実際に`apps/mcp-tasks`をstdio MCPサーバーとして接続し、ツール呼び出しが成功すること(この過程で、Windows上でGit BashからCLIへPOSIXスタイルの `/c/Users/...` パスを渡すとサブプロセスがCONNECTION_CLOSEDになることが判明。`C:/Users/...` 形式に直すことで解決。`apps/web/lib/mcp-config.ts`はNode自身の`import.meta.url`から絶対パスを組み立てるため、この問題は発生しない)
   - `apps/web`をビルド・起動し、`/`・`/approvals`のページ応答、`/api/tasks`でのタスク作成・一覧取得のHTTP往復(UTF-8日本語タイトルを含む)
-  - PVE本体への接続、および`apps/web`からエージェント実行→実際の承認→再開までの一気通貫のブラウザ操作は未検証(Proxmox VE実機がない開発環境のため)
+  - `apps/web`の承認フロー: DBへ直接pending承認を作らせた上で`GET /api/approvals`(`arguments`/`result`のJSON.parseを含む)→`POST /api/approvals/:id/decision`で承認→`status: "approved"`が返ること、同じ承認への2回目の決定要求が「既に決定済み」ガードで400になること、`/tasks/:id`と`/approvals`双方のページがその承認を表示することを確認済み
+  - PVE本体への接続、および`apps/web`からエージェント実行を開始して実際にpending_approvalで一時停止し、承認後に「承認後に再開」ボタンでセッションを再開するところまでの一気通貫のブラウザ操作は未検証(Proxmox VE実機がない開発環境のため)
 - 未実装: Gemini CLI / Codex CLI アダプター、認証・アクセス制御(単一ユーザーのホームラボ用途を前提に本パスでは省略。公開ネットワークに直接晒さない運用を想定)
 
 ## 1. 全体構成

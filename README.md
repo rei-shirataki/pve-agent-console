@@ -31,6 +31,11 @@ packages/shared-types    共有の型・zodスキーマ
 前提: Node.js 22+ / pnpm 10+ / Claude Code CLIがインストール済みで `claude login` 済みであること
 (認証はCLI自身のサブスクリプションログインに委ねるため、本アプリの`.env`にAPIキーは置かない)。
 
+> **セキュリティ上の注意**: `apps/web` には認証・アクセス制御を実装していません(単一ユーザーの
+> ホームラボ用途を前提としたスコープ判断。詳細は [docs/architecture.md](docs/architecture.md) 実装状況を参照)。
+> `next start` はデフォルトで全インターフェース(`0.0.0.0`)にバインドします。信頼できるLAN内でのみ
+> 動かし、インターネットへポート開放・リバースプロキシ公開は行わないでください。
+
 ```bash
 pnpm install
 
