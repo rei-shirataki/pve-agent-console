@@ -1,0 +1,50 @@
+# --- secrets / credentials -------------------------------------------------
+# .env* はすべて無視し、テンプレートのみ明示的に許可する
+.env
+.env.*
+!.env.example
+
+# 生成されたMCPクライアント設定(PVEトークン等をinlineで含みうる)。
+# テンプレート(*.example)のみコミット対象。
+config/mcp/*
+!config/mcp/*.example
+!config/mcp/.gitkeep
+
+*.pem
+*.key
+*.crt
+*credentials*.json
+*secrets*.json
+
+# --- data / database ---------------------------------------------------
+# tasks/approvals/audit_log を保持するSQLiteファイル一式
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/data/
+
+# --- dependencies / build outputs --------------------------------------
+node_modules/
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# --- logs -----------------------------------------------------------------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# --- editor / OS ------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- misc -------------------------------------------------------------
+.turbo/
+coverage/
