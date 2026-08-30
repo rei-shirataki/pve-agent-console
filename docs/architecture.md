@@ -10,8 +10,14 @@ Web UI経由でAIエージェントに任せられるようにする。自宅Pro
 
 ### 実装状況(2026-08-30時点)
 
-- 実装済み: `packages/shared-types`, `packages/db`(スキーマ・マイグレーション), `packages/agent-adapters`(ClaudeCodeAdapterのみ動作、Gemini/Codexは未実装のスタブ), `apps/mcp-tasks`, `apps/mcp-proxmox`(risk tier別ツール + 承認ゲート)。いずれも実際にMCPクライアントから接続してツール呼び出しの疎通を確認済み(read/write/承認/冪等再実行すべて実機テスト済み。PVE本体への接続は未検証)
-- 未実装: `apps/web`(フロントエンド + BFF/オーケストレータ)。次セッションの着手対象
+- 実装済み: `packages/shared-types`, `packages/db`(スキーマ・マイグレーション・`TaskRepository`/`ApprovalRepository`), `packages/agent-adapters`(ClaudeCodeAdapterのみ動作、Gemini/Codexは未実装のスタブ), `apps/mcp-tasks`, `apps/mcp-proxmox`(risk tier別ツール + 承認ゲート), `apps/web`(タスク一覧・作成・詳細、承認キュー、エージェント実行のSSEストリーミング)
+- 実機確認済み:
+  - `apps/mcp-tasks`をMCPクライアントから接続し`task_create`/`task_list`が動作すること
+  - `apps/mcp-proxmox`の承認フロー(pending→approved→冪等な再実行、失敗の記録と再利用)
+  - Claude Code CLI(`claude -p --mcp-config ...`)から実際に`apps/mcp-tasks`をstdio MCPサーバーとして接続し、ツール呼び出しが成功すること(この過程で、Windows上でGit BashからCLIへPOSIXスタイルの `/c/Users/...` パスを渡すとサブプロセスがCONNECTION_CLOSEDになることが判明。`C:/Users/...` 形式に直すことで解決。`apps/web/lib/mcp-config.ts`はNode自身の`import.meta.url`から絶対パスを組み立てるため、この問題は発生しない)
+  - `apps/web`をビルド・起動し、`/`・`/approvals`のページ応答、`/api/tasks`でのタスク作成・一覧取得のHTTP往復(UTF-8日本語タイトルを含む)
+  - PVE本体への接続、および`apps/web`からエージェント実行→実際の承認→再開までの一気通貫のブラウザ操作は未検証(Proxmox VE実機がない開発環境のため)
+- 未実装: Gemini CLI / Codex CLI アダプター、認証・アクセス制御(単一ユーザーのホームラボ用途を前提に本パスでは省略。公開ネットワークに直接晒さない運用を想定)
 
 ## 1. 全体構成
 
@@ -173,8 +179,10 @@ interface Task {
 ## 7. 未確定・実装時に確認が必要な事項
 
 - Gemini CLI / Codex CLIの非対話モードの具体的なCLIフラグ、MCP設定ファイル形式、セッション再開機能の有無(このホストに両CLIが未インストールのため未検証。`packages/agent-adapters`の`GeminiCliAdapter`/`CodexCliAdapter`は未実装のスタブ)
-- 各CLIのMCP transportサポート状況(stdio/HTTP)。ClaudeCodeAdapterは`--mcp-config`にstdioサーバー定義のJSONファイルを渡す想定で実装済みだが、実際のMCP設定ファイルを使った`claude`本番起動(mcp-proxmox/mcp-tasksをMCPサーバーとして接続した状態)はまだ実施していない(MCPクライアント経由の単体疎通確認のみ実施済み)
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
+- 承認決定後のエージェントセッション自動再開(`apps/web`が承認完了をトリガーに自動でセッションを再開する仕組み)は未実装。現状は`apps/web`のタスク詳細ページで、ユーザーがブラウザ上で「承認後に再開」ボタンを押すことで`--resume`付きの新しい実行を手動で開始する形に簡略化している(タブを閉じるとセッションIDはブラウザ側の状態としてのみ保持されるため失われる)
+- 承認キューのリアルタイム反映は、当初案(BFFがDBをポーリングしSSEでブラウザへブロードキャスト)ではなく、ブラウザが`/api/approvals`を数秒間隔でポーリングする方式に簡略化した(単一ユーザーのホームラボ用途では十分と判断。`apps/web/components/TaskDetailClient.tsx`, `ApprovalQueueClient.tsx`参照)
+- ClaudeCodeAdapter経由でmcp-tasks/mcp-proxmoxへ実際に接続できることを実機確認済み(`claude -p --mcp-config ...`)。この検証中に、Git Bashから`/c/Users/...`形式のパスをサブプロセス引数として渡すと接続が`CONNECTION_CLOSED`になる問題を発見。`C:/Users/...`形式に直せば解決するが、そもそも`apps/web`はNode自身が`import.meta.url`から絶対パスを組み立てるため、この問題には該当しない
 
 ### 実装時に行った判断(設計時点から変更・追加した点)
 

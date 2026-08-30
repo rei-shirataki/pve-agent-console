@@ -18,6 +18,7 @@
     "db:migrate": "tsx src/migrate.ts"
   },
   "dependencies": {
+    "@pve-agent-console/shared-types": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.2"
   },

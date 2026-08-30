@@ -1,14 +1,13 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createDb } from "@pve-agent-console/db";
+import { createDb, TaskRepository } from "@pve-agent-console/db";
 import {
   taskCreateInputSchema,
   taskUpdateInputSchema,
   TASK_TYPES,
   TASK_STATUSES,
 } from "@pve-agent-console/shared-types";
-import { TaskRepository } from "./repository.js";
 
 const databasePath = process.env.DATABASE_PATH ?? "./data/pve-agent-console.db";
 const db = createDb(databasePath);

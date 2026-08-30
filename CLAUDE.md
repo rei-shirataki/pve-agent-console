@@ -12,13 +12,17 @@ Web UI経由でAIエージェントに任せられるツール。自宅Proxmox V
 ## コンポーネント構成(詳細は docs/architecture.md)
 
 ```
-apps/web              Next.js: フロントエンド + BFF/オーケストレータ                [未実装]
+apps/web              Next.js: フロントエンド + BFF/オーケストレータ                [実装済み・ビルド/起動確認済み]
 apps/mcp-proxmox        Proxmox MCPサーバー(read/write/destructive risk tier + 承認ゲート) [実装済み・実機テスト済み]
 apps/mcp-tasks           タスク管理MCPサーバー                                    [実装済み・実機テスト済み]
 packages/db                Drizzle + SQLite 共有データ層(tasks / approvals / audit_log) [実装済み]
 packages/agent-adapters   AIプロバイダー共通アダプター層                          [ClaudeCodeAdapterのみ実装、Gemini/Codexはスタブ]
 packages/shared-types      共有の型・zodスキーマ                                 [実装済み]
 ```
+
+apps/webはNext.js(App Router)。Server Componentが`packages/db`のRepositoryを直接呼び出して初期データを取得し、
+書き込み・エージェント実行系のみクライアント側から`app/api/*`のRoute Handlerを叩く構成(自己fetch越しの二重往復を避けるため)。
+承認キューの更新はSSEブロードキャストではなく、ブラウザ側からの数秒間隔ポーリングに簡略化している(docs/architecture.md 7節)。
 
 pnpm workspaceによるモノレポ構成。TypeScript strict モードを全パッケージで有効にする
 (ただし`exactOptionalPropertyTypes`はzodの`.optional()`型推論との相性が悪いため無効化。docs/architecture.md 7節参照)。

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, type SQL } from "drizzle-orm";
-import { tasks, taskComments, type Db } from "@pve-agent-console/db";
 import type {
   Task,
   TaskComment,
@@ -9,6 +8,8 @@ import type {
   TaskStatus,
   TaskType,
 } from "@pve-agent-console/shared-types";
+import { tasks, taskComments } from "./schema.js";
+import type { Db } from "./client.js";
 
 function rowToTask(row: typeof tasks.$inferSelect): Task {
   return {
@@ -31,6 +32,10 @@ export interface TaskListFilter {
   status?: TaskStatus;
 }
 
+/**
+ * タスクCRUD。apps/mcp-tasks(MCPツール経由)とapps/web(ダッシュボード表示)の
+ * 両方から参照される共通実装。会話履歴とは独立にSQLiteへ永続化する。
+ */
 export class TaskRepository {
   constructor(private readonly db: Db) {}
 
@@ -108,5 +113,9 @@ export class TaskRepository {
     };
     this.db.insert(taskComments).values(row).run();
     return row;
+  }
+
+  listComments(taskId: string): TaskComment[] {
+    return this.db.select().from(taskComments).where(eq(taskComments.taskId, taskId)).all();
   }
 }

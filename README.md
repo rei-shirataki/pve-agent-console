@@ -3,7 +3,8 @@
 Proxmox VE の運用タスク(障害調査・構成変更・VM/LXCのライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるツールです。自宅Proxmox VE(LXC構成)を対象に開発しています。
 
-> **Status: 設計フェーズ**。まだ実装コードはありません。設計方針は [docs/architecture.md](docs/architecture.md) を参照してください。
+> **Status: 実装初期段階**。`apps/mcp-tasks` / `apps/mcp-proxmox` / `apps/web` は実装済みで、実際のMCPクライアント・Claude Code CLI・
+> ブラウザ経由での疎通を確認済みです(実PVE環境への接続は未検証)。設計方針は [docs/architecture.md](docs/architecture.md) を参照してください。
 
 ## コンセプト
 
@@ -19,7 +20,7 @@ apps/web            Next.js製フロントエンド + BFF/オーケストレー�
 apps/mcp-proxmox     Proxmox MCPサーバー(読取/書込/破壊 risk tier + 承認ゲート)
 apps/mcp-tasks       タスク管理MCPサーバー
 packages/db           Drizzle + SQLite 共有データ層
-packages/agent-adapters  AIプロバイダー共通アダプター層
+packages/agent-adapters  AIプロバイダー共通アダプター層(ClaudeCodeAdapterのみ実装、他はスタブ)
 packages/shared-types    共有の型・zodスキーマ
 ```
 
@@ -27,8 +28,29 @@ packages/shared-types    共有の型・zodスキーマ
 
 ## セットアップ
 
-実装が着手され次第、このセクションを更新します。認証情報は `.env.example` をコピーして `.env` を作成し、
-値を埋めてください(`.env` はコミットされません)。
+前提: Node.js 22+ / pnpm 10+ / Claude Code CLIがインストール済みで `claude login` 済みであること
+(認証はCLI自身のサブスクリプションログインに委ねるため、本アプリの`.env`にAPIキーは置かない)。
+
+```bash
+pnpm install
+
+# .envを作成し、PVE接続情報などを埋める(.envはコミットされない)
+cp .env.example .env
+
+# 共有DBのマイグレーションを適用(DATABASE_PATHは.envの値を使う場合はdotenv系ツールで読み込むか、
+# 下記のように環境変数として明示的に渡す)
+DATABASE_PATH=./data/pve-agent-console.db pnpm db:migrate
+
+# 全パッケージをビルド(apps/web/mcp-tasks/mcp-proxmoxはNode.js runtimeを前提とする)
+pnpm build
+
+# Web UIを起動(BFFがmcp-tasks/mcp-proxmoxをstdioサブプロセスとして都度起動する)
+pnpm --filter @pve-agent-console/web start
+```
+
+開発時は `pnpm --filter @pve-agent-console/web dev` でNext.jsの開発サーバーを使えます。
+`apps/mcp-tasks` / `apps/mcp-proxmox` を単独のMCPサーバーとして手元で疎通確認したい場合は、
+各ディレクトリで `pnpm dev`(tsxでソースを直接実行)を使ってください。
 
 ## ライセンス
 
