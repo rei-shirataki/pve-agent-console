@@ -3,148 +3,189 @@
 このドキュメントは pve-agent-console の設計方針・コンポーネント構成をまとめたものです。
 実装に着手する際は本ドキュメントを起点とし、変更が生じた場合は本ドキュメントも更新すること。
 
+> **2026-08-31: AIバックエンドをopencodeに切り替える方針転換を行った。** 転換の経緯・判断根拠は
+> [docs/adr/0001-adopt-opencode.md](adr/0001-adopt-opencode.md)、実装の作業分解は
+> [docs/migration-plan.md](migration-plan.md) を参照。本ドキュメントは新方針に合わせて更新済みだが、
+> 実装コード自体はまだ旧方針(自作アダプター層 + 自作承認ゲート)のままで、移行作業は未着手。
+
 ## 0. 目的
 
 Proxmox VE運用に関するタスク(障害調査・構成変更・VM/LXCライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるようにする。自宅Proxmox VE(LXC構成)を対象とし、就活ポートフォリオとしてGitHub公開する。
 
-### 実装状況(2026-08-30時点)
+### 実装状況(2026-08-31時点)
 
-- 実装済み: `packages/shared-types`, `packages/db`(スキーマ・マイグレーション・`TaskRepository`/`ApprovalRepository`), `packages/agent-adapters`(ClaudeCodeAdapterのみ動作、Gemini/Codexは未実装のスタブ), `apps/mcp-tasks`, `apps/mcp-proxmox`(risk tier別ツール + 承認ゲート), `apps/web`(タスク一覧・作成・詳細、承認キュー、エージェント実行のSSEストリーミング)
-- 実機確認済み:
-  - `apps/mcp-tasks`をMCPクライアントから接続し`task_create`/`task_list`が動作すること
-  - `apps/mcp-proxmox`の承認フロー(pending→approved→冪等な再実行、失敗の記録と再利用)
-  - Claude Code CLI(`claude -p --mcp-config ...`)から実際に`apps/mcp-tasks`をstdio MCPサーバーとして接続し、ツール呼び出しが成功すること(この過程で、Windows上でGit BashからCLIへPOSIXスタイルの `/c/Users/...` パスを渡すとサブプロセスがCONNECTION_CLOSEDになることが判明。`C:/Users/...` 形式に直すことで解決。`apps/web/lib/mcp-config.ts`はNode自身の`import.meta.url`から絶対パスを組み立てるため、この問題は発生しない)
-  - `apps/web`をビルド・起動し、`/`・`/approvals`のページ応答、`/api/tasks`でのタスク作成・一覧取得のHTTP往復(UTF-8日本語タイトルを含む)
-  - `apps/web`の承認フロー: DBへ直接pending承認を作らせた上で`GET /api/approvals`(`arguments`/`result`のJSON.parseを含む)→`POST /api/approvals/:id/decision`で承認→`status: "approved"`が返ること、同じ承認への2回目の決定要求が「既に決定済み」ガードで400になること、`/tasks/:id`と`/approvals`双方のページがその承認を表示することを確認済み
-  - PVE本体への接続、および`apps/web`からエージェント実行を開始して実際にpending_approvalで一時停止し、承認後に「承認後に再開」ボタンでセッションを再開するところまでの一気通貫のブラウザ操作は未検証(Proxmox VE実機がない開発環境のため)
-- 未実装: Gemini CLI / Codex CLI アダプター、認証・アクセス制御(単一ユーザーのホームラボ用途を前提に本パスでは省略。公開ネットワークに直接晒さない運用を想定)
+- **旧方針(自作アダプター層 + 自作承認ゲート)で実装・実機検証済みだったもの**(git log参照。opencode移行に伴い
+  多くは削除・簡略化の対象になる): `packages/shared-types`, `packages/db`, `apps/mcp-tasks`, `apps/mcp-proxmox`
+  (risk tier別ツール + 承認ゲート), `apps/web`(タスク一覧・作成・詳細、承認キュー、エージェント実行のSSEストリーミング)、
+  `packages/agent-adapters`(ClaudeCodeAdapterのみ動作)。承認フロー(pending→approved→冪等な再実行)、Claude Code CLI
+  からのMCP接続、Web UIでのタスク作成・承認決定のHTTP往復は実機確認済みだった
+- **今回のセッション**: 設計調査・ドキュメント更新のみ。コードの変更は行っていない。opencode移行の実装は
+  [docs/migration-plan.md](migration-plan.md) のPhase 0(実機検証)から着手する
 
-## 1. 全体構成
+## 1. 全体構成(opencode採用後)
 
 ```
-┌─────────────┐   SSE/HTTP    ┌──────────────────────┐
-│   Web UI     │◄─────────────┤  apps/web (Next.js)   │
-│ (Browser)    │──────────────►│  = フロントエンド     │
-└─────────────┘  REST/Server   │  + BFF/オーケストレータ│
-                    Actions    └──────┬───────┬────────┘
-                                       │spawn  │
-                          ┌────────────┘       │
-                          ▼                    │
-                 ┌──────────────────┐          │
-                 │ AI CLI subprocess │          │
-                 │ (Claude Code /    │          │
-                 │  Gemini CLI /     │          │
-                 │  Codex CLI)       │          │
-                 │  非対話/printモード │          │
-                 └────────┬──────────┘          │
-                          │MCP(既定: stdio)      │
-                 ┌────────┴──────────┐  ┌────────┴─────────┐
-                 │   mcp-proxmox      │  │   mcp-tasks       │
-                 │ (Proxmox MCP)      │  │ (タスク管理MCP)   │
-                 │ 読取/書込/破壊 3層  │  └────────┬─────────┘
-                 │ + 承認ゲート        │           │
-                 └────────┬───────────┘           │
-                          │ PVE REST API(token)    │
-                          ▼                        ▼
-                   Proxmox VE クラスタ      packages/db (共有SQLite)
-                                            apps/web BFFも直接参照
+┌─────────────┐   SSE/HTTP    ┌──────────────────────┐        ┌───────────────────┐
+│   Web UI     │◄──────────────┤  apps/web (Next.js)   │  HTTP  │  opencode server   │
+│ (Browser)    │───────────────►│  = フロントエンド     │───────►│ (`opencode serve`  │
+└─────────────┘   REST         │  + BFF                │  SDK   │  子プロセスとして   │
+                                 └──────────┬────────────┘        │  自動起動)         │
+                                            │instrumentation.ts    └─────────┬──────────┘
+                                            │で起動・event監視                │ MCP
+                                            ▼                                │(stdio, opencode.json)
+                                  packages/db (共有SQLite)          ┌─────────┴─────────┐
+                                  tasks / audit_log(承認履歴)        │                    │
+                                                                     ▼                    ▼
+                                                           apps/mcp-proxmox        apps/mcp-tasks
+                                                         (risk tierメタデータ、       (タスク管理)
+                                                          実行ブロックはopencode委譲)
+                                                                     │
+                                                                     ▼
+                                                              Proxmox VE クラスタ
 ```
 
-すべての永続状態(タスク・承認キュー・監査ログ)は共有SQLite(`packages/db`)に集約する。
-`mcp-proxmox` / `mcp-tasks` はエージェントセッションごとに stdio サブプロセスとして起動されるが、
-状態はプロセスのメモリではなくDBファイルにあるため、複数プロセス・複数セッションをまたいでも一貫する。
+`apps/web`はopencodeの**クライアント**であり、AIプロバイダーとの通信・パーミッション判定・セッション管理・
+MCPツール呼び出しの仲介は全てopencode serverが担う。`apps/web`自身が保持する状態は、タスク管理(`tasks`)と
+承認の**履歴**(`audit_log`)のみで、承認待ち状態そのもの(pending/approved)の真実はopencodeのpermission APIが持つ。
 
 ## 2. コンポーネントの責務
 
-### 2.1 apps/web (Next.js: フロントエンド + BFF/オーケストレータ)
+### 2.1 apps/web (Next.js: フロントエンド + BFF)
 - タスク一覧・詳細・承認キューのUI表示
-- 「タスクを依頼する」操作を受けて、設定で選択されたAIプロバイダーのアダプター(`packages/agent-adapters`)を呼び出す
-- アダプターからのイベントストリームをSSEでブラウザへ中継
-- `approvals`テーブルをポーリングし、pendingの増減をSSEでブラウザへブロードキャスト
-- ユーザーの承認/却下操作を`approvals`テーブルへ書き戻す
-- 承認後、対象タスクのエージェントセッションを再開する(再開方式はプロバイダーごとに異なる。Claude Codeは`-r/--resume <session_id>`で特定セッションを再開可能。Gemini CLI/Codex CLIのセッション再開機能の有無は実装時に要確認)
-- **PVE APIやAIプロバイダーの認証情報そのものは保持しない**(2.3節参照)
+- `instrumentation.ts`のNext.js起動フックで以下を行う:
+  1. `opencode serve`を子プロセスとしてspawnし、ヘルスチェックで起動完了を待つ
+  2. `@opencode-ai/sdk`の`createOpencodeClient`でクライアントを初期化(シングルトン)
+  3. `client.event.subscribe()`をバックグラウンドで購読し続け、permission関連イベント(承認要求・決定)を
+     `audit_log`テーブルに記録する常駐処理を開始する
+- 「タスクを依頼する」操作を受けて、タスクに紐づく`opencodeSessionId`があれば再利用、なければ新規セッションを
+  作成して`client.session.prompt()`を呼ぶ。イベントストリームをSSEでブラウザへ中継する
+- 承認キュー(`GET /api/permissions`相当)は`client.permission.list()`をそのままプロキシする(自前DBに
+  pending状態を持たない)。承認/却下は`client.permission.reply()`を呼ぶだけで、セッション再開のための
+  自前ロジックは不要(opencode側でセッションが継続する)
+- **PVE APIやAIプロバイダーの認証情報そのものは保持しない**
 
-### 2.2 packages/agent-adapters (AIプロバイダー・アダプター層)
-共通インターフェース(概形):
-```ts
-interface AgentAdapter {
-  id: "claude-code" | "gemini-cli" | "codex-cli";
-  isAvailable(): Promise<boolean>;
-  run(input: {
-    taskId: string;
-    prompt: string;
-    mcpConfigPath: string;
-    resumeSessionId?: string;
-  }): AsyncIterable<AgentEvent>;
-}
-type AgentEvent =
-  | { type: "text"; text: string }
-  | { type: "tool_call"; name: string; args: unknown }
-  | { type: "tool_result"; name: string; result: unknown }
-  | { type: "error"; message: string }
-  | { type: "done"; sessionId: string };
-```
-- 各アダプターはCLIをサブプロセス起動し、CLI固有の出力形式を`AgentEvent`へ正規化する
-- **ClaudeCodeAdapter**: `claude -p "<prompt>" --output-format stream-json --mcp-config <path> --strict-mcp-config --permission-mode <mode>` を使用(`claude --help`で実在確認済み)。`--verbose`が`-p`+`stream-json`併用時に必須かどうかは実装時に要検証
-- **GeminiCliAdapter / CodexCliAdapter**: 検証環境に未インストールのため、具体的なCLIフラグは実装時に各CLIの`--help`で確認してから実装する(本ドキュメントでは仕様を確定させない)
-- 有効/無効・デフォルトプロバイダーは設定ファイルで切替可能にする
+### 2.2 opencode server(`opencode serve`)
+外部プロジェクト。詳細は https://github.com/anomalyco/opencode 、公式ドキュメント https://opencode.ai/docs/ 。
+このプロジェクトにとっての役割は以下:
 
-**認証について**: 各CLIツール自身のローカルログイン(サブスクリプション認証)に委ねる。
-`claude login`(Claude Pro/Max)、Gemini CLIのGoogleアカウントログイン、`codex login`(ChatGPT Plus/Pro)。
-本アプリの`.env`にAIプロバイダーのAPIキーを置く必要がない設計とし、コミット漏洩リスクを構造的に下げる。
+- **マルチプロバイダー抽象化**: Claude/OpenAI/Gemini等、`opencode.json`の`provider`設定で選んだモデルに対して
+  プロンプトを送る。認証はプロバイダーごとのAPIキー、またはOAuth(Claude Pro/Maxは非公式)
+- **MCPクライアント**: `opencode.json`の`mcp`設定に登録した`apps/mcp-proxmox`/`apps/mcp-tasks`をstdioで起動し、
+  ツールとして各セッションに公開する(ツール名は`{server名}_{tool名}`で自動採番される)
+- **パーミッション制御**: `permission`設定(`allow`/`ask`/`deny`、globパターン)に基づき、ツール呼び出しを
+  自動実行するか、ユーザー承認を待ってブロックするか、拒否するかを判定する。`ask`判定されたツール呼び出しは
+  サーバー内部で`Deferred`により一時停止し、`permission.asked`相当のイベントを発行、`client.permission.reply()`が
+  呼ばれるまで再開しない
+- **agent機能**: 複数のエージェント定義(異なるパーミッション・ツール制限を持つ)を切り替えられる。
+  本プロジェクトでは`investigator`(read専用、write/destructiveは`deny`)・`operator`(write/destructiveは`ask`)の
+  2エージェントを想定し、タスクの種類(読み取りのみ/書き込みを伴う)に応じて`apps/web`が選択する
+  (詳細は3節)
+- **セッション管理**: 会話(セッション)はサーバー側で継続的に保持される。`apps/web`は`session.prompt()`を
+  同じ`session.id`に対して繰り返し呼ぶだけで会話を継続でき、CLIサブプロセスの再起動やresumeフラグの
+  自前実装は不要になる
+
+**認証について**: APIキー課金を基本方針とする。Claude Pro/Maxサブスクリプションのopencode経由利用は
+Anthropicの公式サポート外(非公式プラグイン頼み、ToS上グレー)と判明したため、デフォルトにはせず、
+READMEにリスクを明記した上でのオプトイン機能としてのみ用意する(docs/adr/0001参照)。
+
+**組み込みツールの扱い**: opencodeは本来「プロジェクトディレクトリ内のコーディングエージェント」であり、
+bash/edit/write/read等の組み込みツールを持つ。本プロジェクトの用途(Proxmox運用)ではこれらを
+`permission`設定で全て`deny`し、MCPツールのみに利用を限定する。
 
 ### 2.3 apps/mcp-proxmox (Proxmox MCPサーバー)
 - Proxmox VE REST APIを叩くツール群を提供
-- ツールごとに risk tier(`read` / `write` / `destructive`)を定義し、サーバー側で一元的に強制する
-  - **設計原則**: タスクの「読み取りのみ/書き込みを伴う」という分類はUI上の見た目・期待値に過ぎない。実際のセキュリティ境界は常にMCPサーバー側のツール単位のrisk tierで強制し、オーケストレータやエージェントの自己申告に依存しない
-  - risk tierはツール定義本体(コード)にプロパティとして持たせ、コンパイル時に全ツールがtierを持つことを保証する(YAMLのような外部データファイルに委ねると、ツール追加時にtier定義漏れが起きても検知できず「未定義tierはread扱い」のようなfail-openになりかねないため)。運用上の上書きが必要な場合のみ`config/permissions.example.yaml`のような上書き設定を許可する
-  - **fail-closed原則**: 何らかの理由でtierが解決できないツールは`destructive`扱いとする
-- PVE API tokenは専用の制限されたPVEロールを持つトークンを使う。read/write/destructiveの階層化は、あくまでPVE側ACLの上に重ねる多層防御(defense-in-depth)であり、PVE側ACL設定の代替にはしない
-
-#### 承認フロー(fail-safeなfast-return方式)
-当初「MCPツール呼び出し自体をDB状態変化までブロックする」設計を検討したが、Claude Code/Gemini CLI/Codex CLIは
-いずれもMCPツール呼び出しに独自のタイムアウト(数十秒オーダー)を持つため、数分単位のブロックはCLI側タイムアウトで
-エージェントがエラーと誤認し、承認後に実行されたPVE操作と「エージェントが認識している結果」が食い違う恐れがある。
-そのため以下の**fast-return + 再開**方式を採用する。
-
-1. エージェントが`write`/`destructive`ツール(例: `vm_stop`)を呼ぶ
-2. `mcp-proxmox`はPVE APIを叩く**前に**、`approvals`テーブルへ`pending`レコードを作成する(tool名・引数・risk tier・task_id・executed_at=NULL)
-3. ツールは即座に`{ status: "pending_approval", approvalId }`を返す(ブロックしない)
-4. エージェントは`approval_check(approvalId)`という共通ツール(全ゲート対象ツールで共用)を呼ぶ。このツールは内部で最大20〜30秒程度の短いポーリングを行い、状態変化を待つ:
-   - `pending`のまま → `{ status: "pending" }`を返す。エージェントはユーザーに承認待ちである旨を伝えてターンを終える
-   - `rejected` → 却下理由付きでエラー相当の結果を返す
-   - `approved`かつ`executed_at`が未設定 → `executed_at IS NULL`を条件にした compare-and-swap 更新でまず実行権を確保し(取れなかった場合は他プロセスが実行中とみなし結果が書き込まれるまで待つ)、確保できたプロセスだけがPVE APIを実際に実行する。**成功・失敗いずれの場合も**結果(`{ok:true,value}`または`{ok:false,error}`)を`resultJson`に保存してから返す(この分岐でのみ実行することで、リトライ・タイムアウト後の再呼び出しが二重にPVE操作を発生させないことを保証する = 冪等性。失敗時も記録することで、以降の`approval_check`が実行済み扱いのまま結果を返せずpendingを返し続ける不整合を防ぐ)
-   - `approved`かつ`executed_at`が設定済み → 保存済みの結果(成功なら`approved`、失敗なら`rejected`+理由)をそのまま返す(再実行しない)。実装・実機での動作確認は `apps/mcp-proxmox` で完了済み
-5. `apps/web`は`approvals`テーブルをポーリングし、pendingが増えたらSSEでブラウザに通知。ユーザーがWeb UIで承認/却下すると`approvals`テーブルの`status`を更新する
-6. ユーザーの承認がエージェントのターン終了後に行われた場合、`apps/web`は承認完了をトリガーに対象タスクのエージェントセッションを再開する(2.1節)。再開時のプロンプトで`approval_check(approvalId)`の再呼び出しを促す
-7. `audit_log`テーブルに「誰が(ユーザー) / いつ / 何を承認・却下したか / 実際に実行された結果」を記録する
+- ツールごとに risk tier(`read` / `write` / `destructive`)をツール定義本体(コード)に持たせる。これは
+  **opencode側の`permission`設定を生成する根拠**、および**UI上のバッジ・警告表示の強度**として使う
+  (opencode自体は3値(`allow`/`ask`/`deny`)しか区別しないため、`write`と`destructive`はどちらも`ask`に
+  マップされるが、UIでは異なる強度の確認を出す)
+  - **fail-closed原則**: 何らかの理由でtierが解決できないツールは、opencode設定側で`deny`にマップする
+    (未知のツールを自動許可しない)
+- PVE API tokenは専用の制限されたPVEロールを持つトークンを使う。risk tierによる階層化は、あくまでPVE側ACLの
+  上に重ねる多層防御(defense-in-depth)であり、PVE側ACL設定の代替にはしない
+- **実行ブロックのロジックは持たない**(旧設計にあった`approval-gate.ts`・`approval_check`ツールは撤去する)。
+  ツールが呼ばれた時点でopencode側の`ask`判定は既に完了しているため、mcp-proxmoxのツールはPVE APIを
+  直接呼び出すだけのシンプルな実装になる
 
 ### 2.4 apps/mcp-tasks (タスク管理MCPサーバー)
-- `task_create` / `task_list` / `task_get` / `task_update_status` / `task_add_comment` / `task_link` などのツールを提供
-- 会話履歴とは独立にSQLiteへ永続化。どのAIプロバイダーからも同一インターフェースで操作できる
-- 調査中にエージェントが見つけた要対応事項も同じツールでタスク化できる(`origin: "agent"`、`source_task_id`で発生元タスクを追跡)
+- `task_create` / `task_list` / `task_get` / `task_update` / `task_add_comment` / `task_link` などのツールを提供
+- 会話履歴とは独立にSQLiteへ永続化。どのAIプロバイダー(opencodeが対応する任意のモデル)からも同一インターフェースで
+  操作できる
+- 調査中にエージェントが見つけた要対応事項も同じツールでタスク化できる(`origin: "agent"`、`source_task_id`で
+  発生元タスクを追跡)
+- opencode移行による変更はない。`opencode.json`の`mcp`設定に登録するだけで動く見込み(Phase 0で要確認)
 
 ### 2.5 packages/db (共有データ層)
-- Drizzle ORM + SQLite(WALモード)。`mcp-proxmox` / `mcp-tasks` / `apps/web`のBFFが同一DBファイルを参照する
+- Drizzle ORM + SQLite(WALモード)。`mcp-tasks`と`apps/web`のBFFが同一DBファイルを参照する
+  (`mcp-proxmox`はDBを持たなくなる見込み。承認状態を持たないため)
 - 主要テーブル:
-  - `tasks`: id, title, description, type, status, priority, origin, source_task_id, tags, created_at, updated_at
-  - `approvals`: id, task_id, tool_name, arguments_json, risk_tier, status(pending/approved/rejected/timeout), created_at, decided_at, decided_by, executed_at, result_json
-  - `audit_log`: id, approval_id, actor, action, detail_json, created_at
+  - `tasks`: id, title, description, type, status, priority, origin, source_task_id, tags, opencode_session_id, created_at, updated_at
+  - `task_comments`: id, task_id, author, body, created_at
+  - `audit_log`(旧`approvals`から縮小): id, task_id, tool_name, arguments_json, risk_tier, decision(approved/rejected),
+    decided_by, decided_at, created_at。**pending状態やexecuted_at・result_jsonは持たない**(実行結果の真実は
+    opencode/PVE側にあり、ここは決定の履歴記録のみ)
 
-## 3. MCP transport
+## 3. パーミッション・承認モデル(opencodeへの委譲)
 
-- **既定: stdio**。エージェントCLIの起動時に、そのセッション専用の`mcp-proxmox`/`mcp-tasks`をstdioサブプロセスとして spawn する。状態はDBにあるためプロセスをまたいでも一貫し、CLIごとのMCP transport対応差異(特にstdio-firstなツール)を気にせず全プロバイダーで動作させやすい
-- HTTP(Streamable HTTP)transportは将来的なオプションとして残すが、採用する場合は対象CLIがHTTP MCPサーバーをサポートすることを実装時に確認してから切り替える
+risk tierの3分類(read/write/destructive)という考え方自体は維持しつつ、実際の強制はopencodeの`permission`設定に
+委譲する。
+
+### opencode.json 設定イメージ
+
+```jsonc
+{
+  "mcp": {
+    "mcp-proxmox": { "type": "local", "command": ["node", "<dist>/mcp-proxmox/server.js"], "environment": { "...": "..." } },
+    "mcp-tasks":   { "type": "local", "command": ["node", "<dist>/mcp-tasks/server.js"],   "environment": { "...": "..." } }
+  },
+  "tools": { "bash": false, "edit": false, "write": false, "read": false },
+  "permission": {
+    "*": "deny",
+    "mcp-proxmox_pve_get_*": "allow",
+    "mcp-proxmox_pve_list_*": "allow",
+    "mcp-proxmox_pve_vm_start": "ask",
+    "mcp-proxmox_pve_vm_shutdown": "ask",
+    "mcp-proxmox_pve_vm_stop": "ask",
+    "mcp-proxmox_pve_vm_delete": "ask",
+    "mcp-tasks_*": "allow"
+  },
+  "agent": {
+    "investigator": { "permission": { "mcp-proxmox_pve_vm_*": "deny" } },
+    "operator": {}
+  }
+}
+```
+
+- `permission`のグローバル既定を`"*": "deny"`にすることで、旧設計のfail-closed原則(未定義tierはdestructive扱い)を
+  踏襲する
+- `investigator`エージェントはwrite/destructiveツールをそもそも`deny`にすることで、「読み取りのみタスク」を
+  選んだ場合はUIの制約だけでなくopencode側でも物理的に書き込み不能にする(2重の防御)
+- `operator`エージェントはグローバル設定(write/destructiveは`ask`)をそのまま使う
+
+### 承認フロー(opencode委譲後)
+
+1. エージェントが`ask`判定のツール(例: `mcp-proxmox_pve_vm_stop`)を呼ぶ
+2. opencode serverがサーバー内部で実行をブロックし、`permission.asked`イベントを発行する
+3. `apps/web`はバックグラウンドで購読している`event.subscribe()`からこのイベントを検知し、承認待ちとしてUIに表示する
+   (加えて、UIの承認キューは`client.permission.list()`を都度呼んでライブの一覧を取得することもできる)
+4. ユーザーがWeb UIで承認/却下すると、`apps/web`は`client.permission.reply({ requestID, action })`を呼ぶ
+5. opencode serverがブロックを解除し、承認なら実際にPVE APIを実行、却下ならエージェントにエラー相当を返す。
+   セッションは中断されないため、**自前のresume処理は不要**
+6. `apps/web`のバックグラウンド購読処理が決定イベントを検知し、`audit_log`に「誰が・いつ・何を・どう決定したか」を記録する
+
+⚠️ この節の(2)〜(5)は公式ドキュメントの記載が薄く、実装前に [docs/migration-plan.md](migration-plan.md) Phase 0で
+実機検証が必須。特に`permission.reply()`の正確なパラメータ・タイムアウト挙動、`event.subscribe()`のペイロード形式は
+未確認。
 
 ## 4. タスク永続化: SQLite
 
+opencode移行後も変更なし。
+
 | 選択肢 | 評価 |
 |---|---|
-| **SQLite(採用)** | ファイル1つで運用完結。single-host/single-userのホームラボ用途に十分な性能。WALモードで複数プロセス(mcp-proxmox / mcp-tasks / web BFF)からの同時アクセスも問題ない。バックアップはファイルコピーで済む |
-| Postgres | 複数ユーザー・高頻度書き込み・将来のクラウド分散配置を見据えるなら妥当だが、home lab single-userには過剰。別コンテナ運用の手間が増える |
-| ファイルベース(JSON/YAML) | 依存は最小だが、承認フローのように複数プロセスが同時に読み書きする用途にはロック機構を自前実装する必要があり不向き |
+| **SQLite(採用)** | ファイル1つで運用完結。single-host/single-userのホームラボ用途に十分な性能。WALモードで複数プロセスからの同時アクセスも問題ない。バックアップはファイルコピーで済む |
+| Postgres | 複数ユーザー・高頻度書き込み・将来のクラウド分散配置を見据えるなら妥当だが、home lab single-userには過剰 |
+| ファイルベース(JSON/YAML) | 複数プロセスが同時に読み書きする用途にはロック機構を自前実装する必要があり不向き |
 
 ## 5. タスク分類
 
@@ -164,30 +205,52 @@ interface Task {
   origin: TaskOrigin;
   sourceTaskId?: string; // 調査中に見つかった場合の発生元タスク
   tags: string[];
+  opencodeSessionId?: string; // このタスクに対応するopencodeセッション(1タスク=1セッションが基本)
   createdAt: string;
   updatedAt: string;
 }
 ```
 
+タスク種別(`type`)は、Web UIが「エージェント実行時にどのopencode agentを使うか」を決めるヒントとしても使う
+(例: `incident`はデフォルトで`investigator`、`change`/`maintenance`はデフォルトで`operator`。ユーザーが
+明示的に切り替えられるようにする)。
+
 ## 6. Proxmox VE 権限モデル(risk tier例)
 
-| tier | 例 | 挙動 |
-|---|---|---|
-| `read` | ノード/VM/LXC状態取得、ログ取得、設定参照、バックアップ一覧 | デフォルト許可、即実行 |
-| `write` | VM/LXC起動停止・再起動、スナップショット作成、設定変更(CPU/メモリ)、ファイアウォールルール変更 | 承認必須(2.3節フロー) |
-| `destructive` | VM/LXC削除、スナップショット削除、ストレージ削除、ディスク縮小、クラスタ離脱 | 承認必須。UI上でより強い警告表示(risk tierに応じた確認UIの強度を分ける) |
+| tier | 例 | opencodeのpermission | UI表示 |
+|---|---|---|---|
+| `read` | ノード/VM/LXC状態取得、ログ取得、設定参照、バックアップ一覧 | `allow` | 通常表示 |
+| `write` | VM/LXC起動停止・再起動、スナップショット作成、設定変更(CPU/メモリ)、ファイアウォールルール変更 | `ask` | 承認待ちバッジ(黄) |
+| `destructive` | VM/LXC削除、スナップショット削除、ストレージ削除、ディスク縮小、クラスタ離脱 | `ask`(`investigator`エージェントでは`deny`) | 承認待ちバッジ(赤、強い警告文言) |
 
 ## 7. 未確定・実装時に確認が必要な事項
 
-- Gemini CLI / Codex CLIの非対話モードの具体的なCLIフラグ、MCP設定ファイル形式、セッション再開機能の有無(このホストに両CLIが未インストールのため未検証。`packages/agent-adapters`の`GeminiCliAdapter`/`CodexCliAdapter`は未実装のスタブ)
+opencode関連(このセッションの調査で発見。実装前に [docs/migration-plan.md](migration-plan.md) Phase 0で検証):
+
+- `opencode serve`にカスタム設定ファイルのパスを渡す方法(`--config`引数の有無、cwd起点か)
+- `client.permission.reply()` / `POST /permission/{requestID}/reply` の正確なパラメータ・タイムアウト挙動
+  (公式ドキュメントの記載が薄い。GitHub Issueに「MCPツールのパーミッションが移行後に効かない」「子セッションで
+  承認プロンプトが詰まる」という報告があり、鵜呑みにせず実機検証すること)
+- `client.permission.list()`のセッション横断・タスクID絞り込みの挙動
+- MCPツール名の実際の自動採番規則(`{server名}_{tool名}`とドキュメントにはあるが、ツール名にアンダースコアを
+  含む場合の挙動などは未確認)
+- opencodeのバージョン追従方針(活発に開発中のOSSで、破壊的変更が起きうる。`package.json`でバージョン固定する)
+
+旧設計から持ち越し・引き続き有効な事項:
+
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
-- 承認決定後のエージェントセッション自動再開(`apps/web`が承認完了をトリガーに自動でセッションを再開する仕組み)は未実装。現状は`apps/web`のタスク詳細ページで、ユーザーがブラウザ上で「承認後に再開」ボタンを押すことで`--resume`付きの新しい実行を手動で開始する形に簡略化している(タブを閉じるとセッションIDはブラウザ側の状態としてのみ保持されるため失われる)
-- 承認キューのリアルタイム反映は、当初案(BFFがDBをポーリングしSSEでブラウザへブロードキャスト)ではなく、ブラウザが`/api/approvals`を数秒間隔でポーリングする方式に簡略化した(単一ユーザーのホームラボ用途では十分と判断。`apps/web/components/TaskDetailClient.tsx`, `ApprovalQueueClient.tsx`参照)
-- ClaudeCodeAdapter経由でmcp-tasks/mcp-proxmoxへ実際に接続できることを実機確認済み(`claude -p --mcp-config ...`)。この検証中に、Git Bashから`/c/Users/...`形式のパスをサブプロセス引数として渡すと接続が`CONNECTION_CLOSED`になる問題を発見。`C:/Users/...`形式に直せば解決するが、そもそも`apps/web`はNode自身が`import.meta.url`から絶対パスを組み立てるため、この問題には該当しない
+- 認証・アクセス制御は未実装(単一ユーザーのホームラボ用途を前提に省略。将来のセットアップウィザード導入時に
+  セットで設計する。CLAUDE.md「将来的な拡張方針」参照)
 
-### 実装時に行った判断(設計時点から変更・追加した点)
+### 実装時に行った判断(旧実装時点の記録。opencode移行後も有効なものが多い)
 
-- `tsconfig.base.json`の`exactOptionalPropertyTypes`は当初trueにしていたが、zodの`.optional()`推論型との相性が悪く(値がundefinedのプロパティを許容できない)全体で頻発するため無効化した。`strict`/`noUncheckedIndexedAccess`は維持
-- TypeScriptは`5.9.3`を採用(`npm view typescript version`時点の最新は`7.0.2`だが、ネイティブ移植版でエコシステム互換性が未成熟なため見送った)
-- SQLiteドライバは`drizzle-orm`が`node:sqlite`向けドライバを提供していなかったため`better-sqlite3`を採用(このホストでは追加のビルドツールなしにネイティブバインディングが解決できることを確認済み)
-- 承認ゲートの実行権確保(compare-and-swap)は`executed_at IS NULL`条件のUPDATEで行い、実行結果は成功・失敗いずれも`{ok, value|error}`の形でJSON保存する。失敗時に記録し損ねると、以降の`approval_check`が実行済み扱いのままpendingを返し続ける不整合が起きるため、この失敗記録は省略不可(実機テストで確認済み)
+- `tsconfig.base.json`の`exactOptionalPropertyTypes`は当初trueにしていたが、zodの`.optional()`推論型との相性が悪く
+  (値がundefinedのプロパティを許容できない)全体で頻発するため無効化した。`strict`/`noUncheckedIndexedAccess`は維持
+- TypeScriptは`5.9.3`を採用(`npm view typescript version`時点の最新は`7.0.2`だが、ネイティブ移植版でエコシステム
+  互換性が未成熟なため見送った)
+- SQLiteドライバは`drizzle-orm`が`node:sqlite`向けドライバを提供していなかったため`better-sqlite3`を採用
+  (このホストでは追加のビルドツールなしにネイティブバインディングが解決できることを確認済み)
+- Windows(Git Bash)からNode子プロセスへパスを渡す際、POSIXスタイル(`/c/Users/...`)だと接続が失敗する
+  (`C:/Users/...`形式にする必要がある)。Node自身が`import.meta.url`等から組み立てるパスはこの問題に該当しない
+- 旧設計の承認ゲート(compare-and-swapによる冪等実行、失敗時の結果記録)は実機テストで正しく動作することを
+  確認済みだったが、opencodeが同種の機構を標準搭載していると判明したため撤去する(docs/adr/0001参照)
