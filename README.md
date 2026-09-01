@@ -11,13 +11,16 @@ Web UI経由でAIエージェントに任せられるツールです。自宅Pro
 
 ## スクリーンショット
 
-| タスク一覧 | エージェント実行 → 承認待ち |
-|---|---|
-| ![タスク一覧](docs/screenshots/dashboard.jpg) | ![承認待ちの操作とライブイベントログ](docs/screenshots/task-detail-pending-approval.jpg) |
+Claude Code的なチャット中心の1画面構成(左: タスク一覧サイドバー、メイン: 会話ビュー)。
+承認プロンプトも別ページではなく会話の中にインラインで表示される。
 
-| 承認後の実行結果 | 承認履歴 |
+| 新しいタスクの作成 | エージェント実行 → 承認待ち(会話にインライン表示) |
 |---|---|
-| ![承認後、実際にツールが実行され結果が記録される](docs/screenshots/task-detail-approved.jpg) | ![承認キューの履歴表示](docs/screenshots/approval-history.jpg) |
+| ![新しいタスクの作成画面](docs/screenshots/dashboard.jpg) | ![ツール呼び出しと承認プロンプトが会話の中にインライン表示される](docs/screenshots/task-detail-pending-approval.jpg) |
+
+| 承認後の実行結果 | 承認キュー |
+|---|---|
+| ![承認後、実際にツールが実行され結果が会話に反映される](docs/screenshots/task-detail-approved.jpg) | ![全タスク横断の承認キュー](docs/screenshots/approval-history.jpg) |
 
 ## コンセプト
 

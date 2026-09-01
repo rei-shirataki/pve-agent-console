@@ -54,7 +54,23 @@ MCPツール呼び出しの仲介は全てopencode serverが担う。`apps/web`�
 ## 2. コンポーネントの責務
 
 ### 2.1 apps/web (Next.js: フロントエンド + BFF)
-- タスク一覧・詳細・承認キューのUI表示
+
+**UI構成(2026-09-02 チャット中心の1画面構成に刷新)**: ダッシュボード・タスク詳細・承認キューを別ページに
+分けていた旧構成をやめ、Claude Code/claude.aiのような「左サイドバー(タスク一覧 + 承認キュー件数) + メイン
+(選択中タスクとの会話ビュー)」構成にした。承認プロンプト(write/destructiveツールのask)も別ページの
+承認キューではなく、会話の中にインラインのカードとして表示し、その場で承認/却下できる。配色・フォントは
+opencode公式Web UI(`opencode web`)を実機で調査し、実際に使われているCSSカスタムプロパティ(背景ほぼ黒
+`#080808`、ブランドカラーのオレンジ`#e27618`、ニュートラルグレーのボーダー、Interフォント)を参考値にした
+(`apps/web/app/globals.css`)。この過程で、opencode自身のWeb UIはiframeで技術的には埋め込み可能(CSP/
+X-Frame-Optionsのブロックなし)なことも実機確認したが、クロスオリジンのため中のUIをカスタマイズできず、
+タスクのメタデータ(種別・優先度)や監査ログとの統合もできないため、埋め込みではなく自前実装を選んだ。
+
+会話は`session.messages()`(opencodeの会話履歴API)・`audit_log`(過去の承認決定)・`task_comments`を
+`apps/web/lib/chat-entries.ts`で共通の`ChatEntry`形式に変換し、初回表示とライブのSSEイベントを同じ見た目で
+描画する(`components/TaskChatView.tsx`)。旧UIにあった「コメントを追加する」独立した入力欄は、チャット中心の
+体験に合わせて主要な入力欄(常にエージェントへの発話)に一本化し、UIからは省いた
+(`task_comments`テーブル・API自体は残しており、過去のコメントは会話内に表示される)。
+
 - `instrumentation.ts`のNext.js起動フックで以下を行う:
   1. `opencode serve`を子プロセスとしてspawnし、ヘルスチェックで起動完了を待つ
   2. `@opencode-ai/sdk`の`createOpencodeClient`でクライアントを初期化(シングルトン)

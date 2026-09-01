@@ -33,7 +33,7 @@ export default async function ApprovalsPage() {
   const history = auditRepo.list();
 
   return (
-    <>
+    <div className="app-main-inner">
       <h1>承認キュー</h1>
       <p className="muted">
         write/destructiveのPVE操作はすべてここに保留されます。承認・却下してください。
@@ -44,6 +44,6 @@ export default async function ApprovalsPage() {
         taskTitles={taskTitles}
         taskIds={taskIds}
       />
-    </>
+    </div>
   );
 }
