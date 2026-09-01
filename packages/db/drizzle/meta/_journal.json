@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788273293825,
+      "tag": "0000_strange_valeria_richards",
+      "breakpoints": true
+    }
+  ]
+}

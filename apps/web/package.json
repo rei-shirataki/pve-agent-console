@@ -1,0 +1,29 @@
+{
+  "name": "@pve-agent-console/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "1.18.25",
+    "@pve-agent-console/db": "workspace:*",
+    "@pve-agent-console/shared-types": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "next": "^16.3.3",
+    "opencode-ai": "1.18.25",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "typescript": "^5.9.3"
+  }
+}
