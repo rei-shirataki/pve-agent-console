@@ -24,6 +24,7 @@ export const taskSchema = z.object({
   origin: z.enum(TASK_ORIGINS),
   sourceTaskId: z.string().nullable(),
   tags: z.array(z.string()),
+  opencodeSessionId: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -40,6 +41,9 @@ export const taskCreateInputSchema = z.object({
 });
 export type TaskCreateInput = z.infer<typeof taskCreateInputSchema>;
 
+// MCPツール(task_update)経由で公開する更新項目。opencodeSessionIdはエージェントに
+// 操作させるべきではないシステム管理項目のため、ここには含めずTaskRepository側の
+// 専用メソッドで扱う。
 export const taskUpdateInputSchema = z.object({
   id: z.string(),
   status: z.enum(TASK_STATUSES).optional(),

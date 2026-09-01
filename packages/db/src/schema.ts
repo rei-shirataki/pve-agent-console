@@ -17,6 +17,8 @@ export const tasks = sqliteTable("tasks", {
   sourceTaskId: text("source_task_id"),
   // 自由記述タグ。JSON配列としてTEXTカラムに格納する
   tagsJson: text("tags_json").notNull().default("[]"),
+  // 対応するopencodeセッション(1タスク=1セッションが基本、Phase 3で利用開始)
+  opencodeSessionId: text("opencode_session_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -35,44 +37,28 @@ export const taskComments = sqliteTable(
   (table) => [index("task_comments_task_id_idx").on(table.taskId)],
 );
 
-// write/destructive risk tierのPVE操作の承認待ちレコード。
-// docs/architecture.md 2.3節「承認フロー(fail-safeなfast-return方式)」を参照。
-export const approvals = sqliteTable(
-  "approvals",
-  {
-    id: text("id").primaryKey(),
-    taskId: text("task_id"),
-    toolName: text("tool_name").notNull(),
-    // ツール呼び出し引数(JSON)。approved確定後にexecuted_atがNULLの間だけ実行に使う
-    argumentsJson: text("arguments_json").notNull(),
-    riskTier: text("risk_tier", { enum: ["write", "destructive"] }).notNull(),
-    status: text("status", {
-      enum: ["pending", "approved", "rejected", "timeout"],
-    })
-      .notNull()
-      .default("pending"),
-    createdAt: text("created_at").notNull(),
-    decidedAt: text("decided_at"),
-    decidedBy: text("decided_by"),
-    // 実際にPVE APIを実行した時刻。設定済みなら再実行しない(冪等性の担保)
-    executedAt: text("executed_at"),
-    resultJson: text("result_json"),
-  },
-  (table) => [
-    index("approvals_status_idx").on(table.status),
-    index("approvals_task_id_idx").on(table.taskId),
-  ],
-);
-
+// write/destructiveのPVE操作について、opencodeのpermission機構が発行した承認要求・決定の履歴。
+// 実行ブロックの実体はopencode server側にあり(docs/adr/0001-adopt-opencode.md参照)、
+// このテーブルは「誰が・いつ・何を・どう決定したか」を記録する受動的な監査ログでしかない。
+// idにはopencodeのpermission request id("per_..."形式)をそのまま使い、
+// イベント購読処理が同じ決定を二重に書き込んでも上書きになるだけで済むようにする(冪等性)。
 export const auditLog = sqliteTable(
   "audit_log",
   {
-    id: text("id").primaryKey(),
-    approvalId: text("approval_id"),
-    actor: text("actor").notNull(),
-    action: text("action").notNull(),
-    detailJson: text("detail_json"),
-    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(), // opencodeのpermission request id
+    sessionId: text("session_id").notNull(), // opencodeのsession id
+    taskId: text("task_id"), // sessionIdからtasks.opencodeSessionIdを逆引きできた場合のみ設定
+    toolName: text("tool_name").notNull(),
+    argumentsJson: text("arguments_json"),
+    // ツール名からriskTierを解決できた場合のみ設定(fail-closedの都合上、解決できないことがある)
+    riskTier: text("risk_tier", { enum: ["write", "destructive"] }),
+    decision: text("decision", { enum: ["approved", "rejected"] }).notNull(),
+    decidedBy: text("decided_by"),
+    askedAt: text("asked_at").notNull(),
+    decidedAt: text("decided_at").notNull(),
   },
-  (table) => [index("audit_log_approval_id_idx").on(table.approvalId)],
+  (table) => [
+    index("audit_log_task_id_idx").on(table.taskId),
+    index("audit_log_session_id_idx").on(table.sessionId),
+  ],
 );

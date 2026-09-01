@@ -3,25 +3,28 @@
 このドキュメントは pve-agent-console の設計方針・コンポーネント構成をまとめたものです。
 実装に着手する際は本ドキュメントを起点とし、変更が生じた場合は本ドキュメントも更新すること。
 
-> **2026-08-31: AIバックエンドをopencodeに切り替える方針転換を行った。** 転換の経緯・判断根拠は
-> [docs/adr/0001-adopt-opencode.md](adr/0001-adopt-opencode.md)、実装の作業分解は
-> [docs/migration-plan.md](migration-plan.md) を参照。本ドキュメントは新方針に合わせて更新済みだが、
-> 実装コード自体はまだ旧方針(自作アダプター層 + 自作承認ゲート)のままで、移行作業は未着手。
+> **2026-08-31: AIバックエンドをopencodeに切り替える方針転換を行い、2026-09-01に移行実装が完了した。**
+> 転換の経緯・判断根拠は [docs/adr/0001-adopt-opencode.md](adr/0001-adopt-opencode.md)、実装の詳細な記録は
+> [docs/migration-plan.md](migration-plan.md) を参照。本ドキュメントは新方針・新実装に基づく最新の状態。
 
 ## 0. 目的
 
 Proxmox VE運用に関するタスク(障害調査・構成変更・VM/LXCライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるようにする。自宅Proxmox VE(LXC構成)を対象とし、就活ポートフォリオとしてGitHub公開する。
 
-### 実装状況(2026-08-31時点)
+### 実装状況(2026-09-01時点)
 
-- **旧方針(自作アダプター層 + 自作承認ゲート)で実装・実機検証済みだったもの**(git log参照。opencode移行に伴い
-  多くは削除・簡略化の対象になる): `packages/shared-types`, `packages/db`, `apps/mcp-tasks`, `apps/mcp-proxmox`
-  (risk tier別ツール + 承認ゲート), `apps/web`(タスク一覧・作成・詳細、承認キュー、エージェント実行のSSEストリーミング)、
-  `packages/agent-adapters`(ClaudeCodeAdapterのみ動作)。承認フロー(pending→approved→冪等な再実行)、Claude Code CLI
-  からのMCP接続、Web UIでのタスク作成・承認決定のHTTP往復は実機確認済みだった
-- **今回のセッション**: 設計調査・ドキュメント更新のみ。コードの変更は行っていない。opencode移行の実装は
-  [docs/migration-plan.md](migration-plan.md) のPhase 0(実機検証)から着手する
+opencode移行(Phase 0〜5)が完了し、実機で一気通貫の動作を確認済み([docs/migration-plan.md](migration-plan.md)参照)。
+`apps/web`の本番ビルド(`next start`)を実際に起動した状態で、タスク作成 → エージェント実行 → PVE write系ツール呼び出しで
+opencodeのpermissionにより自動ブロック → Web UIの承認API経由で承認 → 実際にツールが実行される → `audit_log`に決定が
+記録される、という流れをHTTP経由で確認済み(PVE本体は未接続のためツール実行自体は失敗するが、承認フロー・実行トリガー・
+監査記録はすべて正しく機能することを確認した)。
+
+未検証・既知の課題:
+- 実PVE環境への接続(引き続き未検証)
+- APIキー課金の実プロバイダー(Anthropic/OpenAI等)での動作確認(無料モデルopencode/big-pickleで代用確認)
+- `audit_log`の`arguments`列が記録されないケースがある(docs/migration-plan.md Phase 5参照)
+- `apps/web`に認証・アクセス制御なし(単一ユーザーのホームラボ用途として意図的に省略)
 
 ## 1. 全体構成(opencode採用後)
 
@@ -60,9 +63,11 @@ MCPツール呼び出しの仲介は全てopencode serverが担う。`apps/web`�
      `audit_log`テーブルに記録する常駐処理を開始する
 - 「タスクを依頼する」操作を受けて、タスクに紐づく`opencodeSessionId`があれば再利用、なければ新規セッションを
   作成して`client.session.prompt()`を呼ぶ。イベントストリームをSSEでブラウザへ中継する
-- 承認キュー(`GET /api/permissions`相当)は`client.permission.list()`をそのままプロキシする(自前DBに
-  pending状態を持たない)。承認/却下は`client.permission.reply()`を呼ぶだけで、セッション再開のための
-  自前ロジックは不要(opencode側でセッションが継続する)
+- 承認キュー(`GET /api/permissions`)はopencodeの`GET /permission`をそのままプロキシする(自前DBに
+  pending状態を持たない)。承認/却下(`POST /api/permissions/:id/reply`)は`POST /permission/{requestID}/reply`を
+  呼ぶだけで、セッション再開のための自前ロジックは不要(opencode側でセッションが継続する)。**`@opencode-ai/sdk`
+  (1.18.25時点)はpermission系のオペレーションをクライアントの便利メソッドとしてラップしていないため、
+  `apps/web/lib/opencode-permissions.ts`でOpenAPI仕様から確認した生のHTTPエンドポイントを直接叩いている**
 - **PVE APIやAIプロバイダーの認証情報そのものは保持しない**
 
 ### 2.2 opencode server(`opencode serve`)
@@ -79,7 +84,7 @@ MCPツール呼び出しの仲介は全てopencode serverが担う。`apps/web`�
   呼ばれるまで再開しない
 - **agent機能**: 複数のエージェント定義(異なるパーミッション・ツール制限を持つ)を切り替えられる。
   本プロジェクトでは`investigator`(read専用、write/destructiveは`deny`)・`operator`(write/destructiveは`ask`)の
-  2エージェントを想定し、タスクの種類(読み取りのみ/書き込みを伴う)に応じて`apps/web`が選択する
+  2エージェントを定義し、タスクの種類(読み取りのみ/書き込みを伴う)に応じて`apps/web`が選択する
   (詳細は3節)
 - **セッション管理**: 会話(セッション)はサーバー側で継続的に保持される。`apps/web`は`session.prompt()`を
   同じ`session.id`に対して繰り返し呼ぶだけで会話を継続でき、CLIサブプロセスの再起動やresumeフラグの
@@ -113,11 +118,11 @@ bash/edit/write/read等の組み込みツールを持つ。本プロジェクト
   操作できる
 - 調査中にエージェントが見つけた要対応事項も同じツールでタスク化できる(`origin: "agent"`、`source_task_id`で
   発生元タスクを追跡)
-- opencode移行による変更はない。`opencode.json`の`mcp`設定に登録するだけで動く見込み(Phase 0で要確認)
+- opencode移行による変更はない。`opencode.json`の`mcp`設定に登録するだけで動作することを実機確認済み
 
 ### 2.5 packages/db (共有データ層)
 - Drizzle ORM + SQLite(WALモード)。`mcp-tasks`と`apps/web`のBFFが同一DBファイルを参照する
-  (`mcp-proxmox`はDBを持たなくなる見込み。承認状態を持たないため)
+  (`mcp-proxmox`は承認状態を持たなくなったためDB依存自体を削除した)
 - 主要テーブル:
   - `tasks`: id, title, description, type, status, priority, origin, source_task_id, tags, opencode_session_id, created_at, updated_at
   - `task_comments`: id, task_id, author, body, created_at
@@ -168,14 +173,16 @@ risk tierの3分類(read/write/destructive)という考え方自体は維持し�
 2. opencode serverがサーバー内部で実行をブロックし、`permission.asked`イベントを発行する
 3. `apps/web`はバックグラウンドで購読している`event.subscribe()`からこのイベントを検知し、承認待ちとしてUIに表示する
    (加えて、UIの承認キューは`client.permission.list()`を都度呼んでライブの一覧を取得することもできる)
-4. ユーザーがWeb UIで承認/却下すると、`apps/web`は`client.permission.reply({ requestID, action })`を呼ぶ
+4. ユーザーがWeb UIで承認/却下すると、`apps/web`は`POST /permission/{requestID}/reply`(`{reply: "once"|"reject"}`)を呼ぶ
 5. opencode serverがブロックを解除し、承認なら実際にPVE APIを実行、却下ならエージェントにエラー相当を返す。
    セッションは中断されないため、**自前のresume処理は不要**
-6. `apps/web`のバックグラウンド購読処理が決定イベントを検知し、`audit_log`に「誰が・いつ・何を・どう決定したか」を記録する
+6. `apps/web`のバックグラウンド購読処理(`instrumentation.ts`)が`permission.replied`イベントを検知し、`audit_log`に
+   「誰が・いつ・何を・どう決定したか」を記録する
 
-⚠️ この節の(2)〜(5)は公式ドキュメントの記載が薄く、実装前に [docs/migration-plan.md](migration-plan.md) Phase 0で
-実機検証が必須。特に`permission.reply()`の正確なパラメータ・タイムアウト挙動、`event.subscribe()`のペイロード形式は
-未確認。
+✅ この節の(1)〜(6)は実機で一気通貫に検証済み(docs/migration-plan.md Phase 5)。ただし`@opencode-ai/sdk`の型定義には
+`permission.asked`イベント自体が定義されておらず、`permission.replied`の型も実際のプロパティ名
+(`sessionID`/`requestID`/`reply`)と型定義上の名前(`sessionID`/`permissionID`/`response`)が一致しないことが判明した。
+型を信用せず、実機で観測した実際のペイロード形状を手書きの型として使っている(`apps/web/instrumentation.ts`参照)。
 
 ## 4. タスク永続化: SQLite
 
@@ -223,26 +230,29 @@ interface Task {
 | `write` | VM/LXC起動停止・再起動、スナップショット作成、設定変更(CPU/メモリ)、ファイアウォールルール変更 | `ask` | 承認待ちバッジ(黄) |
 | `destructive` | VM/LXC削除、スナップショット削除、ストレージ削除、ディスク縮小、クラスタ離脱 | `ask`(`investigator`エージェントでは`deny`) | 承認待ちバッジ(赤、強い警告文言) |
 
-## 7. 未確定・実装時に確認が必要な事項
+## 7. 未確定・今後確認が必要な事項
 
-opencode関連(このセッションの調査で発見。実装前に [docs/migration-plan.md](migration-plan.md) Phase 0で検証):
+opencode Phase 0検証で判明・解決したこと(記録として残す):
 
-- `opencode serve`にカスタム設定ファイルのパスを渡す方法(`--config`引数の有無、cwd起点か)
-- `client.permission.reply()` / `POST /permission/{requestID}/reply` の正確なパラメータ・タイムアウト挙動
-  (公式ドキュメントの記載が薄い。GitHub Issueに「MCPツールのパーミッションが移行後に効かない」「子セッションで
-  承認プロンプトが詰まる」という報告があり、鵜呑みにせず実機検証すること)
-- `client.permission.list()`のセッション横断・タスクID絞り込みの挙動
-- MCPツール名の実際の自動採番規則(`{server名}_{tool名}`とドキュメントにはあるが、ツール名にアンダースコアを
-  含む場合の挙動などは未確認)
-- opencodeのバージョン追従方針(活発に開発中のOSSで、破壊的変更が起きうる。`package.json`でバージョン固定する)
+- `opencode serve`の設定ファイル検出は**cwd起点**(`--config`のようなフラグは存在しない)。実機確認済み
+- パーミッション応答は`POST /permission/{requestID}/reply`(`{reply: "once"|"always"|"reject"}`)。SDKに
+  便利メソッドがないため生のHTTPを叩く(2.1節参照)。実機確認済み
+- パーミッション一覧は`GET /permission`(全セッション横断、pendingのみを返す)。実機確認済み。
+  セッションID/タスクIDでの絞り込みは`apps/web`側で行っている(`app/api/permissions/route.ts`)
+- MCPツール名の自動採番規則は`{server名}_{tool名}`。実機確認済み
 
-旧設計から持ち越し・引き続き有効な事項:
+引き続き未検証・未実装の事項:
 
+- 実PVE環境への接続(開発環境にProxmox実機がないため)
+- APIキー課金の実プロバイダー(Anthropic/OpenAI等)での動作確認(無料モデルopencode/big-pickleで代用確認したのみ)
+- opencodeのバージョン追従方針(活発に開発中のOSSで、破壊的変更が起きうる。`package.json`で`1.18.25`に固定済みだが、
+  更新時は都度Phase 0相当の実機確認が必要)
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
 - 認証・アクセス制御は未実装(単一ユーザーのホームラボ用途を前提に省略。将来のセットアップウィザード導入時に
   セットで設計する。CLAUDE.md「将来的な拡張方針」参照)
+- `audit_log`の`arguments`列が記録されないケースがある(docs/migration-plan.md Phase 5参照)
 
-### 実装時に行った判断(旧実装時点の記録。opencode移行後も有効なものが多い)
+### 実装時に行った判断
 
 - `tsconfig.base.json`の`exactOptionalPropertyTypes`は当初trueにしていたが、zodの`.optional()`推論型との相性が悪く
   (値がundefinedのプロパティを許容できない)全体で頻発するため無効化した。`strict`/`noUncheckedIndexedAccess`は維持
@@ -253,4 +263,9 @@ opencode関連(このセッションの調査で発見。実装前に [docs/migr
 - Windows(Git Bash)からNode子プロセスへパスを渡す際、POSIXスタイル(`/c/Users/...`)だと接続が失敗する
   (`C:/Users/...`形式にする必要がある)。Node自身が`import.meta.url`等から組み立てるパスはこの問題に該当しない
 - 旧設計の承認ゲート(compare-and-swapによる冪等実行、失敗時の結果記録)は実機テストで正しく動作することを
-  確認済みだったが、opencodeが同種の機構を標準搭載していると判明したため撤去する(docs/adr/0001参照)
+  確認済みだったが、opencodeが同種の機構を標準搭載していると判明したため撤去した(docs/adr/0001参照)
+- `opencode-ai`(bin実行ファイルのみのパッケージ)のバイナリパス解決に当初`import.meta.resolve()`を使っていたが、
+  Turbopackのサーバーバンドル(`next start`)で`Q.resolve is not a function`という実行時エラーを起こすことが
+  判明した。`process.cwd()`起点の`node_modules`探索に切り替えて解決した(`apps/web/lib/opencode-server.ts`参照)。
+  Next.js(Turbopack)配下では`import.meta.resolve`のようなあまり一般的でない動的ESM APIは、ビルド後の実際の
+  起動まで確認しないと壊れていることに気づけない、という教訓

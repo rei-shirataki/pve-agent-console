@@ -1,29 +1,18 @@
-CREATE TABLE `approvals` (
-	`id` text PRIMARY KEY NOT NULL,
-	`task_id` text,
-	`tool_name` text NOT NULL,
-	`arguments_json` text NOT NULL,
-	`risk_tier` text NOT NULL,
-	`status` text DEFAULT 'pending' NOT NULL,
-	`created_at` text NOT NULL,
-	`decided_at` text,
-	`decided_by` text,
-	`executed_at` text,
-	`result_json` text
-);
---> statement-breakpoint
-CREATE INDEX `approvals_status_idx` ON `approvals` (`status`);--> statement-breakpoint
-CREATE INDEX `approvals_task_id_idx` ON `approvals` (`task_id`);--> statement-breakpoint
 CREATE TABLE `audit_log` (
 	`id` text PRIMARY KEY NOT NULL,
-	`approval_id` text,
-	`actor` text NOT NULL,
-	`action` text NOT NULL,
-	`detail_json` text,
-	`created_at` text NOT NULL
+	`session_id` text NOT NULL,
+	`task_id` text,
+	`tool_name` text NOT NULL,
+	`arguments_json` text,
+	`risk_tier` text,
+	`decision` text NOT NULL,
+	`decided_by` text,
+	`asked_at` text NOT NULL,
+	`decided_at` text NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `audit_log_approval_id_idx` ON `audit_log` (`approval_id`);--> statement-breakpoint
+CREATE INDEX `audit_log_task_id_idx` ON `audit_log` (`task_id`);--> statement-breakpoint
+CREATE INDEX `audit_log_session_id_idx` ON `audit_log` (`session_id`);--> statement-breakpoint
 CREATE TABLE `task_comments` (
 	`id` text PRIMARY KEY NOT NULL,
 	`task_id` text NOT NULL,
@@ -44,6 +33,7 @@ CREATE TABLE `tasks` (
 	`origin` text NOT NULL,
 	`source_task_id` text,
 	`tags_json` text DEFAULT '[]' NOT NULL,
+	`opencode_session_id` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );

@@ -10,11 +10,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@pve-agent-console/agent-adapters": "workspace:*",
+    "@opencode-ai/sdk": "1.18.25",
     "@pve-agent-console/db": "workspace:*",
     "@pve-agent-console/shared-types": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "next": "^16.3.3",
+    "opencode-ai": "1.18.25",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.5.4"

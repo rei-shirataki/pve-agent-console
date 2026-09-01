@@ -1,58 +1,96 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AgentEvent, Approval, Task, TaskComment } from "@pve-agent-console/shared-types";
+import type { AuditLogEntry, Task, TaskComment } from "@pve-agent-console/shared-types";
+
+interface PendingPermission {
+  id: string;
+  toolName: string;
+  riskTier: "write" | "destructive" | null;
+}
+
+interface OpencodeEvent {
+  type: string;
+  properties?: Record<string, unknown>;
+}
 
 interface Props {
   task: Task;
   initialComments: TaskComment[];
-  initialApprovals: Approval[];
+  initialPendingPermissions: PendingPermission[];
+  initialAuditLog: AuditLogEntry[];
 }
 
-function eventLabel(event: AgentEvent): string {
+const POLL_MS = 4000;
+
+function describeEvent(event: OpencodeEvent): { kind: string; text: string } | null {
+  const props = event.properties ?? {};
   switch (event.type) {
-    case "text":
-      return event.text;
-    case "tool_call":
-      return `🔧 ${event.name}(${JSON.stringify(event.args)})`;
-    case "tool_result":
-      return `↩ ${JSON.stringify(event.result)}`;
-    case "error":
-      return `⚠ ${event.message}`;
-    case "done":
-      return event.summary ? `✅ ${event.summary}` : "✅ 完了";
+    case "message.part.updated": {
+      const part = props.part as
+        | { type?: string; text?: string; tool?: string; state?: { status?: string; input?: unknown; output?: unknown } }
+        | undefined;
+      if (!part) return null;
+      if (part.type === "text" && part.text) return { kind: "text", text: part.text };
+      if (part.type === "reasoning" && part.text) return { kind: "reasoning", text: part.text };
+      if (part.type === "tool") {
+        const status = part.state?.status ?? "pending";
+        if (status === "completed") {
+          return { kind: "tool", text: `🔧 ${part.tool}(${JSON.stringify(part.state?.input)}) → ${JSON.stringify(part.state?.output)}` };
+        }
+        return { kind: "tool", text: `🔧 ${part.tool} [${status}]` };
+      }
+      return null;
+    }
+    case "permission.asked":
+      return { kind: "permission", text: `⏸ 承認待ち: ${String(props.permission)}` };
+    case "permission.replied":
+      return { kind: "permission", text: `✅ 決定: ${String(props.reply)}` };
+    case "session.status": {
+      const status = (props.status as { type?: string } | undefined)?.type;
+      return status === "busy" ? null : { kind: "status", text: `セッション状態: ${status}` };
+    }
+    case "session.error":
+      return { kind: "error", text: `⚠ ${String(props.message)}` };
+    default:
+      return null;
   }
 }
 
-/**
- * 承認キューはWeb UI(このコンポーネント)がapprovalsテーブルを定期ポーリングして表示する。
- * docs/architecture.md ではBFFがSSEでブロードキャストする設計だったが、単一ユーザーの
- * ホームラボ用途では素朴なポーリングで十分と判断し簡略化した(architecture.md 7節に記載)。
- */
-const APPROVALS_POLL_MS = 4000;
-
-export default function TaskDetailClient({ task, initialComments, initialApprovals }: Props) {
+export default function TaskDetailClient({
+  task,
+  initialComments,
+  initialPendingPermissions,
+  initialAuditLog,
+}: Props) {
   const [comments, setComments] = useState(initialComments);
-  const [approvals, setApprovals] = useState(initialApprovals);
+  const [pending, setPending] = useState(initialPendingPermissions);
+  const [auditLog, setAuditLog] = useState(initialAuditLog);
   const [prompt, setPrompt] = useState("");
-  const [log, setLog] = useState<AgentEvent[]>([]);
+  const [agent, setAgent] = useState<"investigator" | "operator">(
+    task.type === "incident" ? "investigator" : "operator",
+  );
+  const [log, setLog] = useState<{ kind: string; text: string }[]>([]);
   const [running, setRunning] = useState(false);
-  const [lastSessionId, setLastSessionId] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
 
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
+  const refreshPending = async () => {
+    const res = await fetch(`/api/permissions?taskId=${task.id}`);
+    if (res.ok) setPending((await res.json()) as PendingPermission[]);
+  };
+
+  const refreshAuditLog = async () => {
+    const res = await fetch(`/api/tasks/${task.id}/audit-log`);
+    if (res.ok) setAuditLog((await res.json()) as AuditLogEntry[]);
+  };
+
   useEffect(() => {
     const timer = setInterval(() => {
-      fetch(`/api/approvals?taskId=${task.id}`)
-        .then((res) => (res.ok ? (res.json() as Promise<Approval[]>) : null))
-        .then((data) => {
-          if (data) setApprovals(data);
-        })
-        .catch(() => {
-          /* ポーリング失敗は無視して次回再試行 */
-        });
-    }, APPROVALS_POLL_MS);
+      void refreshPending();
+      void refreshAuditLog();
+    }, POLL_MS);
     return () => clearInterval(timer);
   }, [task.id]);
 
@@ -60,7 +98,7 @@ export default function TaskDetailClient({ task, initialComments, initialApprova
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [log]);
 
-  async function runAgent(promptText: string, resumeSessionId?: string) {
+  async function runAgent(promptText: string) {
     if (!promptText.trim() || running) return;
     setRunning(true);
     setLog([]);
@@ -68,7 +106,7 @@ export default function TaskDetailClient({ task, initialComments, initialApprova
       const res = await fetch("/api/agent/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskId: task.id, prompt: promptText, resumeSessionId }),
+        body: JSON.stringify({ taskId: task.id, prompt: promptText, agent }),
       });
       if (!res.ok || !res.body) {
         throw new Error(`agent run failed to start: ${res.status}`);
@@ -85,29 +123,32 @@ export default function TaskDetailClient({ task, initialComments, initialApprova
         for (const part of parts) {
           const line = part.trim();
           if (!line.startsWith("data:")) continue;
-          const event = JSON.parse(line.slice(5).trim()) as AgentEvent;
-          setLog((prev) => [...prev, event]);
-          if (event.type === "done") setLastSessionId(event.sessionId);
+          const event = JSON.parse(line.slice(5).trim()) as OpencodeEvent;
+          const described = describeEvent(event);
+          if (described) setLog((prev) => [...prev, described]);
+          if (event.type === "permission.asked" || event.type === "permission.replied") {
+            void refreshPending();
+          }
         }
       }
     } catch (err) {
       setLog((prev) => [
         ...prev,
-        { type: "error", message: err instanceof Error ? err.message : String(err) },
+        { kind: "error", text: err instanceof Error ? err.message : String(err) },
       ]);
     } finally {
       setRunning(false);
+      void refreshAuditLog();
     }
   }
 
-  async function decide(approvalId: string, decision: "approved" | "rejected") {
-    await fetch(`/api/approvals/${approvalId}/decision`, {
+  async function decide(permissionId: string, action: "once" | "reject") {
+    await fetch(`/api/permissions/${permissionId}/reply`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ action }),
     });
-    const res = await fetch(`/api/approvals?taskId=${task.id}`);
-    if (res.ok) setApprovals((await res.json()) as Approval[]);
+    await refreshPending();
   }
 
   async function postComment() {
@@ -124,51 +165,41 @@ export default function TaskDetailClient({ task, initialComments, initialApprova
     }
   }
 
-  const pendingApprovedNotYetExecuted = approvals.find((a) => a.status === "approved" && !a.executedAt);
-
   return (
     <>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>承認待ちの操作</h3>
-        {approvals.length === 0 && <p className="muted">このタスクに紐づく承認待ちの操作はありません。</p>}
-        {approvals.map((a) => (
-          <div
-            key={a.id}
-            style={{
-              borderTop: "1px solid var(--border)",
-              paddingTop: 10,
-              marginTop: 10,
-            }}
-          >
+        {pending.length === 0 && <p className="muted">承認待ちの操作はありません。</p>}
+        {pending.map((p) => (
+          <div key={p.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 10 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span className={`badge risk-${a.riskTier}`}>{a.riskTier}</span>
-              <code>{a.toolName}</code>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {a.status}
-              </span>
+              {p.riskTier && <span className={`badge risk-${p.riskTier}`}>{p.riskTier}</span>}
+              <code>{p.toolName}</code>
             </div>
-            <pre className="muted" style={{ fontSize: 12, margin: "6px 0" }}>
-              {JSON.stringify(a.arguments)}
-            </pre>
-            {a.status === "pending" && (
-              <div className="row">
-                <button onClick={() => void decide(a.id, "approved")}>承認</button>
-                <button className="danger" onClick={() => void decide(a.id, "rejected")}>
-                  却下
-                </button>
-              </div>
-            )}
+            <div className="row" style={{ marginTop: 8 }}>
+              <button onClick={() => void decide(p.id, "once")}>承認</button>
+              <button className="danger" onClick={() => void decide(p.id, "reject")}>
+                却下
+              </button>
+            </div>
           </div>
         ))}
-        {pendingApprovedNotYetExecuted && (
-          <p style={{ marginTop: 10 }}>
-            承認済みで未実行の操作があります。下の「承認後に再開」でエージェントに続きを実行させてください。
-          </p>
-        )}
       </div>
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>エージェントに依頼する</h3>
+        <div className="field">
+          <label htmlFor="agent-select">エージェント</label>
+          <select
+            id="agent-select"
+            value={agent}
+            onChange={(e) => setAgent(e.target.value as "investigator" | "operator")}
+            disabled={running}
+          >
+            <option value="investigator">investigator(読み取り専用、書き込みは不可)</option>
+            <option value="operator">operator(書き込み操作は承認制で実行可)</option>
+          </select>
+        </div>
         <div className="field">
           <textarea
             value={prompt}
@@ -177,35 +208,35 @@ export default function TaskDetailClient({ task, initialComments, initialApprova
             disabled={running}
           />
         </div>
-        <div className="row">
-          <button disabled={running || !prompt.trim()} onClick={() => void runAgent(prompt)}>
-            {running ? "実行中..." : "実行"}
-          </button>
-          <button
-            className="secondary"
-            disabled={running || !lastSessionId}
-            onClick={() =>
-              void runAgent(
-                "承認されました。approval_checkツールで結果を確認し、作業を続けてください。",
-                lastSessionId ?? undefined,
-              )
-            }
-          >
-            承認後に再開
-          </button>
-        </div>
+        <button disabled={running || !prompt.trim()} onClick={() => void runAgent(prompt)}>
+          {running ? "実行中..." : "実行"}
+        </button>
 
         {log.length > 0 && (
           <div className="event-log" style={{ marginTop: 12 }}>
-            {log.map((event, i) => (
+            {log.map((entry, i) => (
               <div className="event-line" key={i}>
-                <div className="kind">{event.type}</div>
-                <div>{eventLabel(event)}</div>
+                <div className="kind">{entry.kind}</div>
+                <div>{entry.text}</div>
               </div>
             ))}
             <div ref={logEndRef} />
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>承認履歴</h3>
+        {auditLog.length === 0 && <p className="muted">まだ記録がありません。</p>}
+        {auditLog.map((entry) => (
+          <div key={entry.id} style={{ marginBottom: 10, fontSize: 13 }}>
+            <span className="muted">{new Date(entry.decidedAt).toLocaleString("ja-JP")}</span>{" "}
+            <code>{entry.toolName}</code>{" "}
+            <span className={entry.decision === "approved" ? "badge" : "badge risk-destructive"}>
+              {entry.decision}
+            </span>
+          </div>
+        ))}
       </div>
 
       <div className="card">

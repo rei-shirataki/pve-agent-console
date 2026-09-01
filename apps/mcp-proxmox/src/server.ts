@@ -1,15 +1,10 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createDb } from "@pve-agent-console/db";
-import { requiresApproval, type RiskTier } from "@pve-agent-console/shared-types";
+import type { RiskTier } from "@pve-agent-console/shared-types";
 import { createPveClientFromEnv } from "./pve-client.js";
-import { ApprovalGate, type ToolExecutor } from "./approval-gate.js";
 
-const databasePath = process.env.DATABASE_PATH ?? "./data/pve-agent-console.db";
-const db = createDb(databasePath);
 const pve = createPveClientFromEnv();
-const gate = new ApprovalGate(db);
 
 function jsonResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -22,7 +17,12 @@ function errorResult(message: string) {
 /**
  * PVE操作ツールの定義。riskTierは必須フィールド(コンパイルエラーで検知でき、
  * オプショナルにして"うっかり省略"できないようにしている。CLAUDE.md「絶対に守る設計原則」参照)。
- * read以外は必ず承認ゲート(fast-return + approval_check)を経由する。
+ *
+ * 実行のブロック(write/destructiveの承認待ち)はこのMCPサーバーの責務ではない。
+ * opencode側の`permission`設定(ask)がツール呼び出し自体をブロック・再開するため、
+ * ここに来た時点で承認判定は既に完了している。riskTierはopencodeのpermission設定を
+ * 生成する根拠、およびUI上のバッジ表示の強度として使うメタデータに過ぎない
+ * (docs/adr/0001-adopt-opencode.md参照)。
  */
 interface PveToolDef {
   name: string;
@@ -33,7 +33,7 @@ interface PveToolDef {
   execute: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
-const vmArgsSchema = { node: z.string(), vmid: z.number().int(), taskId: z.string().optional() };
+const vmArgsSchema = { node: z.string(), vmid: z.number().int() };
 
 const toolDefs: PveToolDef[] = [
   // --- read(デフォルト許可) -----------------------------------------
@@ -77,7 +77,7 @@ const toolDefs: PveToolDef[] = [
     inputSchema: { node: z.string() },
     execute: (args) => pve.listLxc(args.node as string),
   },
-  // --- write(承認必須) ------------------------------------------------
+  // --- write(opencode側でask) ------------------------------------------
   {
     name: "pve_vm_start",
     title: "VMを起動",
@@ -102,7 +102,7 @@ const toolDefs: PveToolDef[] = [
     inputSchema: vmArgsSchema,
     execute: (args) => pve.stopVm(args.node as string, args.vmid as number),
   },
-  // --- destructive(承認必須。UI側でより強い確認を求める想定) -----------
+  // --- destructive(opencode側でask。UI側でより強い確認を求める想定) -----
   {
     name: "pve_vm_delete",
     title: "VMを削除",
@@ -113,14 +113,9 @@ const toolDefs: PveToolDef[] = [
   },
 ];
 
-const server = new McpServer({ name: "pve-agent-console-mcp-proxmox", version: "0.1.0" });
-const executors = new Map<string, ToolExecutor>();
+const server = new McpServer({ name: "pve-agent-console-mcp-proxmox", version: "0.2.0" });
 
 for (const def of toolDefs) {
-  if (requiresApproval(def.riskTier)) {
-    executors.set(def.name, def.execute);
-  }
-
   server.registerTool(
     def.name,
     {
@@ -130,48 +125,13 @@ for (const def of toolDefs) {
     },
     async (args: Record<string, unknown>) => {
       try {
-        if (!requiresApproval(def.riskTier)) {
-          return jsonResult(await def.execute(args));
-        }
-
-        const taskId = typeof args.taskId === "string" ? args.taskId : null;
-        const pending = gate.requestApproval({
-          taskId,
-          toolName: def.name,
-          args,
-          riskTier: def.riskTier,
-        });
-        return jsonResult({
-          ...pending,
-          message: `承認待ちです。approval_check(approvalId: "${pending.approvalId}") で結果を確認してください。`,
-        });
+        return jsonResult(await def.execute(args));
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));
       }
     },
   );
 }
-
-// --- 承認確認(全write/destructiveツール共通の窓口) ----------------------
-
-server.registerTool(
-  "approval_check",
-  {
-    title: "承認状況を確認する",
-    description:
-      "write/destructiveツールがpending_approvalを返したとき、そのapprovalIdを指定してこのツールを呼ぶ。" +
-      "承認されるまでは status: 'pending' が返る。approvedの場合はここで初めて実際の操作が実行され" +
-      "(2回目以降は保存済みの結果を返すだけで再実行はしない)、rejectedの場合は却下理由が返る。",
-    inputSchema: { approvalId: z.string() },
-  },
-  async ({ approvalId }) => {
-    try {
-      return jsonResult(await gate.check(approvalId, executors));
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
-);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

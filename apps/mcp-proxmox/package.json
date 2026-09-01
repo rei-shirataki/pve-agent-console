@@ -14,9 +14,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@pve-agent-console/db": "workspace:*",
     "@pve-agent-console/shared-types": "workspace:*",
-    "drizzle-orm": "^0.45.2",
     "undici": "^8.10.0",
     "zod": "^4.5.4"
   },

@@ -3,11 +3,11 @@
 Proxmox VE の運用タスク(障害調査・構成変更・VM/LXCのライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるツールです。自宅Proxmox VE(LXC構成)を対象に開発しています。
 
-> **Status: アーキテクチャ移行中**。AIバックエンドを自作アダプター層から [opencode](https://github.com/anomalyco/opencode)
-> (OSSのAIコーディングエージェント)経由に切り替える設計転換を行いました。経緯は
-> [docs/adr/0001-adopt-opencode.md](docs/adr/0001-adopt-opencode.md)、実装計画は
-> [docs/migration-plan.md](docs/migration-plan.md) を参照してください。以下のセットアップ手順は移行後の想定であり、
-> 実装(移行作業)はまだ着手していません。
+> **Status: 実装済み(実機E2E検証済み)**。AIバックエンドは [opencode](https://github.com/anomalyco/opencode)
+> (OSSのAIコーディングエージェント)経由です。経緯は [docs/adr/0001-adopt-opencode.md](docs/adr/0001-adopt-opencode.md)、
+> 実装の詳細な記録(実機検証で判明したこと)は [docs/migration-plan.md](docs/migration-plan.md) を参照してください。
+> タスク作成→エージェント実行→承認→実行→監査ログ記録の一気通貫を実機確認済みですが、実PVE環境への接続と
+> APIキー課金の実プロバイダーでの動作確認はまだ行っていません(無料モデルでの動作確認のみ)。
 
 ## コンセプト
 
@@ -33,11 +33,10 @@ headless server(`opencode serve`)として担う。`apps/web`起動時に子プ�
 
 ## セットアップ
 
-> ⚠️ 以下はopencode移行後の想定手順です。移行作業自体はまだ実装していません
-> ([docs/migration-plan.md](docs/migration-plan.md) 参照)。現時点では実行できません。
-
-前提: Node.js 22+ / pnpm 10+ / 利用するAIプロバイダーのAPIキー(既定はAPIキー課金。Claude Pro/Maxサブスクリプションの
-opencode経由利用は非公式のためオプトイン機能としてのみサポート予定。詳細は[docs/adr/0001](docs/adr/0001-adopt-opencode.md))。
+前提: Node.js 22+ / pnpm 10+ / 利用するAIプロバイダーのAPIキー(未設定の場合はAPIキー不要な無料モデル
+`opencode/big-pickle`にフォールバックし、動作確認だけならAPIキーなしでも可能です。本番運用では実際に使いたい
+プロバイダーのAPIキーを設定してください。Claude Pro/Maxサブスクリプションのopencode経由利用は非公式のため
+オプトイン機能としてのみサポートします。詳細は[docs/adr/0001](docs/adr/0001-adopt-opencode.md))。
 
 > **セキュリティ上の注意**: `apps/web` には認証・アクセス制御を実装していません(単一ユーザーの
 > ホームラボ用途を前提としたスコープ判断。詳細は [docs/architecture.md](docs/architecture.md) 実装状況を参照)。

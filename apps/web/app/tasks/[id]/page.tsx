@@ -1,6 +1,9 @@
 import { notFound } from "next/navigation";
-import { TaskRepository, ApprovalRepository } from "@pve-agent-console/db";
+import { TaskRepository, AuditLogRepository } from "@pve-agent-console/db";
 import { getDb } from "@/lib/db";
+import { getOpencodeClient } from "@/lib/opencode-client";
+import { listPermissions } from "@/lib/opencode-permissions";
+import { resolveRiskTier } from "@/lib/opencode-config";
 import { TASK_TYPE_LABELS, TASK_STATUS_LABELS, TASK_PRIORITY_LABELS } from "@/lib/labels";
 import TaskDetailClient from "@/components/TaskDetailClient";
 
@@ -9,12 +12,23 @@ export const dynamic = "force-dynamic";
 export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const taskRepo = new TaskRepository(getDb());
-  const approvalRepo = new ApprovalRepository(getDb());
+  const auditRepo = new AuditLogRepository(getDb());
 
   const task = taskRepo.getTask(id);
   if (!task) notFound();
   const comments = taskRepo.listComments(id);
-  const approvals = approvalRepo.listApprovals({ taskId: id });
+  const auditLog = auditRepo.listByTask(id);
+
+  let pendingPermissions: { id: string; toolName: string; riskTier: "write" | "destructive" | null }[] = [];
+  try {
+    const { baseUrl } = await getOpencodeClient();
+    const all = await listPermissions(baseUrl);
+    pendingPermissions = all
+      .filter((p) => p.sessionID === task.opencodeSessionId)
+      .map((p) => ({ id: p.id, toolName: p.permission, riskTier: resolveRiskTier(p.permission) }));
+  } catch {
+    // opencode server起動直後などで取得できない場合はクライアント側のポーリングに任せる
+  }
 
   return (
     <>
@@ -27,7 +41,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       </div>
       {task.description && <p>{task.description}</p>}
 
-      <TaskDetailClient task={task} initialComments={comments} initialApprovals={approvals} />
+      <TaskDetailClient
+        task={task}
+        initialComments={comments}
+        initialPendingPermissions={pendingPermissions}
+        initialAuditLog={auditLog}
+      />
     </>
   );
 }

@@ -1,72 +1,80 @@
 # opencode移行 作業計画
 
 背景・決定事項は [docs/adr/0001-adopt-opencode.md](adr/0001-adopt-opencode.md) を参照。
-本ドキュメントは実装セッションをまたいで進捗を追うための作業分解。**このセッションでは未着手**(調査・設計のみ)。
 
-## Phase 0: 調査・実機検証(実装着手前に必須)
+**状態(2026-09-01時点): Phase 0〜5すべて完了・実機検証済み。** 以下、各Phaseで実際に分かったこと・
+変更したことを記録として残す。
 
-自作の承認ゲートを廃止してopencodeのpermission機構に置き換える前に、以下を実機で確認する
-(ドキュメントの記載だけでは確証が持てなかった項目。docs/architecture.md 参照)。
+## Phase 0: 調査・実機検証 ✅
 
-- [ ] `opencode serve`を実際に起動し、`@opencode-ai/sdk`から接続してセッション作成・`session.prompt()`が動くこと
-- [ ] `apps/mcp-tasks`(既存のビルド済みMCPサーバー)を`opencode.json`の`mcp`に登録し、`mcp-tasks_task_list`等が
-      ツールとして認識されること
-- [ ] `permission: {"...": "ask"}`設定でツール呼び出しが実際にブロックされ、`event.subscribe()`で
-      `permission.asked`相当のイベントが受け取れること、`client.permission.reply()`で再開できること
-- [ ] `opencode serve`にカスタム設定ファイルの場所をどう伝えるか(`--config`引数か、cwd起点か)
-- [ ] `client.permission.list()`がセッション横断・セッションID絞り込みでどう振る舞うか
-- [ ] (可能であれば)APIキー課金で最小の実プロバイダー呼び出しが通ること。サブスクリプションプラグインの検証は
-      オプトイン機能のため後回しでよい
+- [x] `opencode serve`を実際に起動し、`@opencode-ai/sdk`から接続してセッション作成・`session.prompt()`が動くこと
+      → 確認済み。`opencode/big-pickle`(APIキー不要の無料モデル)で疎通
+- [x] `apps/mcp-tasks`を`opencode.json`の`mcp`に登録し、ツールとして認識されること
+      → 確認済み。ツール名は`{server名}_{tool名}`(例: `mcp-tasks_task_list`)
+- [x] `permission: {"...": "ask"}`設定でツール呼び出しが実際にブロックされ、`event.subscribe()`で
+      `permission.asked`イベントが受け取れること、`client.permission.reply()`で再開できること
+      → 確認済み。ただし**SDKの型定義には`permission.asked`イベント自体が定義されておらず**、
+      `permission.replied`の型も実際のプロパティ名(`requestID`/`reply`)と定義(`permissionID`/`response`)が
+      一致しない。型を信用せず実機で観測した実際のペイロード形状を手書きの型として使うことにした
+      (`apps/web/instrumentation.ts`参照)
+- [x] `opencode serve`にカスタム設定ファイルの場所をどう伝えるか
+      → `--config`フラグは存在しない。**cwd起点で`opencode.json`を自動検出する**ことを確認
+- [x] `client.permission.list()`の挙動 → SDKには`permission`名前空間の便利メソッドが存在しなかったため、
+      OpenAPI仕様(`GET {baseUrl}/doc`)から確認した生のHTTPエンドポイント(`GET /permission`,
+      `POST /permission/{requestID}/reply`)を直接叩く方式にした(`apps/web/lib/opencode-permissions.ts`)
+- [x] APIキー課金での実プロバイダー呼び出し → 無料モデルで代用して確認(実際のAPIキー課金プロバイダーでの
+      確認は未実施。プロバイダー切り替え自体は`OPENCODE_PROVIDER_ID`/`OPENCODE_MODEL_ID`で対応)
 
-この段階で「ドキュメント記載と実際の挙動が異なる」ことが判明した場合、Phase 1以降の設計を先に見直すこと。
+## Phase 1: packages/db スキーマ改修 ✅
 
-## Phase 1: packages/db スキーマ改修
+- [x] `tasks`に`opencode_session_id`を追加
+- [x] `approvals`テーブルを廃止し、`audit_log`テーブル(決定履歴のみ)に一本化
+- [x] `TaskRepository`に`getTaskByOpencodeSessionId`/`setOpencodeSessionId`を追加、
+      `ApprovalRepository`を`AuditLogRepository`に置き換え
+- [x] `packages/shared-types`の`agent-event.ts`/`approval.ts`を削除、`audit-log.ts`を新設
 
-- [ ] `tasks`に`opencode_session_id`(nullable text)を追加するマイグレーション
-- [ ] `approvals`テーブルを「実行ブロックの実体」から「決定履歴の記録」に縮小
-      (`executed_at`・`result_json`・CAS前提のロジックを撤去し、`decision`・`decided_by`・`decided_at`・
-      `risk_tier`・`tool_name`・`arguments_json`・`task_id`のみの受動的な履歴レコードにする)
-- [ ] `ApprovalRepository`を履歴追記専用に書き換え(「既に決定済みなら拒否」ガードのようなpending状態管理は
-      opencode側の責務になるため不要になる)
-- [ ] `packages/shared-types`の`agent-event.ts`を削除、`approval.ts`を新しいレコード形状に合わせて更新
+## Phase 2: apps/mcp-proxmox 簡略化 ✅
 
-## Phase 2: apps/mcp-proxmox 簡略化
+- [x] `approval-gate.ts`・`approval_check`ツールを削除。各ツールは直接実行するだけになった
+- [x] `packages/db`/`drizzle-orm`への依存自体を削除(承認状態を持たなくなったため不要に)
+- [x] 実機スモークテスト済み(MCPクライアントから直接呼び出し、read/writeツールが動作することを確認)
 
-- [ ] `approval-gate.ts`を削除
-- [ ] 各ツールの`execute`を直接呼び出しに戻す(fast-return/pending_approvalラッパーを撤去)。
-      `riskTier`フィールド自体は維持し、opencodeの`permission`設定生成の根拠として使う
-- [ ] `approval_check`ツールを削除
-- [ ] 実機で再度スモークテスト(MCPクライアントから直接呼び出して、read/writeツールが単純に動くことを確認)
+## Phase 3: apps/web への opencode 統合基盤 ✅
 
-## Phase 3: apps/web への opencode 統合基盤
+- [x] `lib/opencode-config.ts` / `lib/opencode-server.ts` / `lib/opencode-client.ts` / `lib/opencode-permissions.ts`
+- [x] `instrumentation.ts`でopencode serve起動 + permissionイベント購読 → `audit_log`記録
+- [x] `packages/agent-adapters`を削除、`lib/orchestrator.ts`・`lib/mcp-config.ts`を削除
+- [x] ⚠️ **`import.meta.resolve()`でopencode-aiバイナリを解決する実装は、Turbopackのサーバーバンドルで
+      `Q.resolve is not a function`エラーを起こすことが実機で判明**(`next start`実行時)。
+      `process.cwd()`起点の`node_modules`探索に変更して解決した(`lib/opencode-server.ts`参照)
 
-- [ ] `lib/opencode-config.ts`: `opencode.json`を生成する処理(`mcp`定義、`permission`ルール、`agent`定義)。
-      前回の`lib/mcp-config.ts`の設計思想(秘密情報はリポジトリ外に書く)を踏襲
-- [ ] `lib/opencode-server.ts`: `opencode serve`をspawnし、ヘルスチェックしてbaseURLを返す
-- [ ] `lib/opencode-client.ts`: `createOpencodeClient`のシングルトン
-- [ ] `instrumentation.ts`: 上記2つを起動時に呼び出し、`event.subscribe()`を購読し続けるバックグラウンド処理を開始して
-      permission関連イベントを`audit_log`に記録する
-- [ ] `packages/agent-adapters`を削除、`lib/orchestrator.ts`を削除
+## Phase 4: Web UI 作り直し ✅
 
-## Phase 4: Web UI 作り直し(AI呼び出し関連のみ)
+- [x] `app/api/agent/run/route.ts`: `session.create`(初回のみ)+`session.promptAsync` + イベントストリームの
+      SSE中継に書き換え。セッションIDは`tasks.opencode_session_id`に保存して再利用するため、
+      手動resumeボタン・`resumeSessionId`ロジックは完全に不要になった
+- [x] `app/api/permissions/**`: `client.permission.list()`/`reply()`相当をプロキシ
+- [x] `TaskDetailClient.tsx` / `ApprovalQueueClient.tsx`: 新API・新イベント形式に対応
+- [x] `app/api/audit-log/route.ts`(全体の承認履歴) / `app/api/tasks/[id]/audit-log/route.ts`(タスク別)を追加
+- [x] 変更不要だった部分(想定通り): ダッシュボード、`CreateTaskForm`、タスクCRUD API、`globals.css`、`layout.tsx`
 
-- [ ] `app/api/agent/run/route.ts`: `session.create`/`session.prompt` + 関連イベントのSSE中継に書き換え
-      (タスクに紐づく`opencodeSessionId`があれば再利用、なければ新規作成して保存)
-- [ ] `components/TaskDetailClient.tsx`: 新イベント形式への対応。手動resumeボタン・`resumeSessionId`ロジックを削除
-      (opencode側でセッションが継続するため不要)
-- [ ] `app/api/approvals/**` → `app/api/permissions/**`に置き換え、`client.permission.list()`/`reply()`を
-      プロキシする実装に変更
-- [ ] `components/ApprovalQueueClient.tsx` / `app/approvals/page.tsx`: 新APIに合わせてデータ取得部分を書き換え
-      (見た目・バッジ等のデザインは流用)
-- [ ] 変更不要: ダッシュボード、`CreateTaskForm`、タスクCRUD API、`globals.css`、`layout.tsx`
+## Phase 5: エンドツーエンド検証 ✅
 
-## Phase 5: エンドツーエンド検証
+実際にブラウザ相当のHTTPクライアントから、本番ビルド(`next start`)を起動した状態で以下を確認済み:
 
-- [ ] ブラウザ操作で「エージェント実行 → askツール呼び出しでブロック → UIで承認 → 実行再開 → 結果表示」の
-      一気通貫を確認
-- [ ] `audit_log`に承認履歴が正しく記録されることを確認
-- [ ] 可能であればPVE実機への接続確認(前回セッションから引き続き未検証)
-- [ ] docs/architecture.md・README.mdを実装後の状態に更新
+1. タスク作成 → `POST /api/agent/run`でエージェント実行 → 実際に`mcp-proxmox_pve_vm_start`
+   (writeツール)を呼び出し
+2. `permission.asked`イベントがSSE経由でブラウザ側に届く
+3. `GET /api/permissions`に、正しく`taskId`(sessionID経由で逆引き)・`riskTier`付きで一覧表示される
+4. `POST /api/permissions/:id/reply`で承認 → pendingから消える
+5. 承認後、実際にPVE API呼び出しが実行される(ダミーURLのため`fetch failed`で失敗するが、
+   実行されたこと自体・エージェントがその結果をユーザーに報告することを確認)
+6. `GET /api/tasks/:id/audit-log`に決定が記録される(`decision: "approved"`、`riskTier: "write"`等)
+
+**既知の小さな未解決事項**: 監査ログの`arguments`列(ツール呼び出しの実引数)が`null`のまま記録される
+ケースがあった。`message.part.updated`の`tool`パートから`callID`経由で引数を拾う実装
+(`instrumentation.ts`)のタイミングに起因すると見られるが、承認フロー自体の正しさには影響しないため
+未修正のまま残している。次回改善時に調査すること。
 
 ## Phase 6(将来。今回のスコープ外、設計メモのみ)
 

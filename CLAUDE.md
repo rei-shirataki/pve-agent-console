@@ -11,21 +11,23 @@
 Proxmox VE運用タスク(障害調査・構成変更・VM/LXCライフサイクル操作・監視/アラート設定・定期メンテナンス)を、
 Web UI経由でAIエージェントに任せられるツール。自宅Proxmox VE(LXC構成)を対象に、就活ポートフォリオとしてGitHub公開する。
 
-## アーキテクチャ方針(2026-08-31 opencode採用に転換)
+## アーキテクチャ方針(2026-08-31 opencode採用に転換、2026-09-01 移行実装完了)
 
 AIバックエンドは自作アダプター層ではなく、**OSSのAIコーディングエージェント opencode**
 (https://github.com/anomalyco/opencode, MIT License)の headless server(`opencode serve`)+
-公式SDK(`@opencode-ai/sdk`)経由で扱う。`apps/web`はopencode serverのクライアントという位置づけになる。
-経緯・判断根拠は [docs/adr/0001-adopt-opencode.md](docs/adr/0001-adopt-opencode.md) を参照。
+公式SDK(`@opencode-ai/sdk`)経由で扱う。`apps/web`はopencode serverのクライアントという位置づけ。
+経緯・判断根拠は [docs/adr/0001-adopt-opencode.md](docs/adr/0001-adopt-opencode.md)、実装の詳細な記録
+(実機検証で判明したこと・変更点)は [docs/migration-plan.md](docs/migration-plan.md) を参照。
 
 ```
-apps/web              Next.js: フロントエンド + BFF                              [設計変更中。旧実装からの移行作業は docs/migration-plan.md]
-apps/mcp-proxmox        Proxmox MCPサーバー(read/write/destructive risk tierのメタデータ) [簡略化改修が必要。承認ブロックロジックは撤去予定]
+apps/web              Next.js: フロントエンド + BFF                              [実装済み・E2E実機検証済み]
+apps/mcp-proxmox        Proxmox MCPサーバー(read/write/destructive risk tierのメタデータ) [実装済み。承認ブロックロジックは撤去済み]
 apps/mcp-tasks           タスク管理MCPサーバー                                    [変更不要。opencodeのmcp設定に登録するだけ]
-packages/db                Drizzle + SQLite 共有データ層(tasks / audit_log)        [スキーマ改修が必要(opencodeSessionId追加、approvals簡略化)]
-packages/agent-adapters   (廃止予定。opencodeに委譲するため削除する)
-packages/shared-types      共有の型・zodスキーマ                                 [agent-event.tsを削除、approval.tsを見直す]
+packages/db                Drizzle + SQLite 共有データ層(tasks / audit_log)        [実装済み(opencodeSessionId追加、approvals→audit_logに縮小)]
+packages/shared-types      共有の型・zodスキーマ                                 [実装済み(agent-event.ts/approval.tsは削除、audit-log.tsを新設)]
 ```
+
+`packages/agent-adapters`は削除済み(opencodeに完全委譲)。
 
 - `opencode serve`は`apps/web`(Next.js)の起動時に`instrumentation.ts`から子プロセスとして自動spawnする(別プロセス常駐にはしない)
 - `apps/mcp-proxmox`・`apps/mcp-tasks`は変更を最小限にし、opencodeの`opencode.json`の`mcp`設定から接続する
@@ -42,8 +44,9 @@ packages/shared-types      共有の型・zodスキーマ                       
    - 実際のガードは常にopencodeの`permission`設定(ツール単位)、および可能なら`agent`機能(investigator/operator)による
      二重の強制で担保する。UI側のタスク種別選択は「どのagentを使うか」のヒントに過ぎない
 3. **write / destructive操作の実行前承認は、自前でフルスクラッチせずopencodeのpermission機構(`ask`)に乗せる**
-   - opencodeがツール呼び出しをサーバー内部でブロックし、`permission.asked`イベントを発行、`client.permission.reply()`で
-     再開する仕組みを標準搭載している。自前の承認ブロック・冪等実行ロジック(旧`apps/mcp-proxmox/approval-gate.ts`)は撤去する
+   - opencodeがツール呼び出しをサーバー内部でブロックし、`permission.asked`イベントを発行、
+     `POST /permission/{requestID}/reply`(SDKに便利メソッドがないため生のHTTPを叩く。`lib/opencode-permissions.ts`)で
+     再開する仕組みを標準搭載している。自前の承認ブロック・冪等実行ロジック(旧`apps/mcp-proxmox/approval-gate.ts`)は撤去済み
    - 自前DBの`audit_log`は「誰が・いつ・何を承認/却下したか」を記録する**受動的な監査ログ**としてのみ残す
      (opencode移行前は`approvals`テーブル自体がブロックの実体を兼ねていたが、それはやめる)
 4. **AIプロバイダーの認証情報を `.env` や設定ファイルに直接置かない**。APIキー課金を基本とし、`.env`に置く場合も
@@ -73,8 +76,13 @@ packages/shared-types      共有の型・zodスキーマ                       
 - 上記はユーザーのグローバル方針(`~/.claude/CLAUDE.md`)と同一。本プロジェクト固有の上書きはなし
 - 新しいMCPツールを追加する場合は、必ずrisk tierを明示的に指定する(コンパイルエラーで検知できる形にする。オプショナルにしない)
 - PVE APIクライアント・DBアクセスなど副作用のあるコードは、テストしやすいよう純粋なロジックと分離する
-- opencode周りの実装(パーミッション応答API、MCPツールパーミッションの挙動)はドキュメントの記載が薄いため、
-  **実装前に実機で検証してから**コードに反映する(推測でフラグ・パラメータ名を書かない。docs/migration-plan.md Phase 0参照)
+- opencode周りの実装(パーミッション応答API、MCPツールパーミッションの挙動)はドキュメント・SDK型定義の記載が
+  実際の挙動とずれていることがある(`@opencode-ai/sdk`の型には`permission.asked`イベントが存在せず、
+  `permission.replied`のプロパティ名も型定義と実際の値が食い違う、等)。**型やドキュメントを鵜呑みにせず実機で
+  検証してから**コードに反映すること(docs/migration-plan.md Phase 0参照)
+- Next.js(Turbopack)配下では`import.meta.resolve`のような動的ESM APIが`next build`は通っても`next start`実行時に
+  壊れることがある(実例: docs/architecture.md「実装時に行った判断」参照)。ビルドが通ることと実際に動くことは別、
+  という前提で`next start`まで実機確認すること
 
 ## Git運用
 

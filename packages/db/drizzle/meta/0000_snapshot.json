@@ -1,16 +1,23 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d3e874a8-3f17-4a22-aa38-81b2b0d8261b",
+  "id": "e3190aa1-3da3-459d-aa5a-448a6b218693",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
-    "approvals": {
-      "name": "approvals",
+    "audit_log": {
+      "name": "audit_log",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
@@ -32,36 +39,21 @@
           "name": "arguments_json",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "risk_tier": {
           "name": "risk_tier",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pending'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "decided_at": {
-          "name": "decided_at",
-          "type": "text",
-          "primaryKey": false,
           "notNull": false,
+          "autoincrement": false
+        },
+        "decision": {
+          "name": "decision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
           "autoincrement": false
         },
         "decided_by": {
@@ -71,93 +63,33 @@
           "notNull": false,
           "autoincrement": false
         },
-        "executed_at": {
-          "name": "executed_at",
+        "asked_at": {
+          "name": "asked_at",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
-        "result_json": {
-          "name": "result_json",
+        "decided_at": {
+          "name": "decided_at",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         }
       },
       "indexes": {
-        "approvals_status_idx": {
-          "name": "approvals_status_idx",
-          "columns": [
-            "status"
-          ],
-          "isUnique": false
-        },
-        "approvals_task_id_idx": {
-          "name": "approvals_task_id_idx",
+        "audit_log_task_id_idx": {
+          "name": "audit_log_task_id_idx",
           "columns": [
             "task_id"
           ],
           "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "audit_log": {
-      "name": "audit_log",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
         },
-        "approval_id": {
-          "name": "approval_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "actor": {
-          "name": "actor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "detail_json": {
-          "name": "detail_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "audit_log_approval_id_idx": {
-          "name": "audit_log_approval_id_idx",
+        "audit_log_session_id_idx": {
+          "name": "audit_log_session_id_idx",
           "columns": [
-            "approval_id"
+            "session_id"
           ],
           "isUnique": false
         }
@@ -303,6 +235,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
+        },
+        "opencode_session_id": {
+          "name": "opencode_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",

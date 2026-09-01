@@ -22,6 +22,7 @@ function rowToTask(row: typeof tasks.$inferSelect): Task {
     origin: row.origin,
     sourceTaskId: row.sourceTaskId,
     tags: JSON.parse(row.tagsJson) as string[],
+    opencodeSessionId: row.opencodeSessionId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -51,6 +52,7 @@ export class TaskRepository {
       origin: input.origin,
       sourceTaskId: input.sourceTaskId,
       tagsJson: JSON.stringify(input.tags),
+      opencodeSessionId: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -79,6 +81,11 @@ export class TaskRepository {
     return row ? rowToTask(row) : null;
   }
 
+  getTaskByOpencodeSessionId(sessionId: string): Task | null {
+    const row = this.db.select().from(tasks).where(eq(tasks.opencodeSessionId, sessionId)).get();
+    return row ? rowToTask(row) : null;
+  }
+
   updateTask(input: TaskUpdateInput): Task {
     const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date().toISOString() };
     if (input.status !== undefined) patch.status = input.status;
@@ -89,6 +96,18 @@ export class TaskRepository {
     this.db.update(tasks).set(patch).where(eq(tasks.id, input.id)).run();
     const updated = this.getTask(input.id);
     if (!updated) throw new Error(`task not found: ${input.id}`);
+    return updated;
+  }
+
+  /** opencodeSessionIdはエージェントに操作させるべきではないため、専用メソッドで扱う */
+  setOpencodeSessionId(id: string, opencodeSessionId: string): Task {
+    this.db
+      .update(tasks)
+      .set({ opencodeSessionId, updatedAt: new Date().toISOString() })
+      .where(eq(tasks.id, id))
+      .run();
+    const updated = this.getTask(id);
+    if (!updated) throw new Error(`task not found: ${id}`);
     return updated;
   }
 
