@@ -9,6 +9,16 @@ Web UI経由でAIエージェントに任せられるツールです。自宅Pro
 > タスク作成→エージェント実行→承認→実行→監査ログ記録の一気通貫を実機確認済みですが、実PVE環境への接続と
 > APIキー課金の実プロバイダーでの動作確認はまだ行っていません(無料モデルでの動作確認のみ)。
 
+## スクリーンショット
+
+| タスク一覧 | エージェント実行 → 承認待ち |
+|---|---|
+| ![タスク一覧](docs/screenshots/dashboard.jpg) | ![承認待ちの操作とライブイベントログ](docs/screenshots/task-detail-pending-approval.jpg) |
+
+| 承認後の実行結果 | 承認履歴 |
+|---|---|
+| ![承認後、実際にツールが実行され結果が記録される](docs/screenshots/task-detail-approved.jpg) | ![承認キューの履歴表示](docs/screenshots/approval-history.jpg) |
+
 ## コンセプト
 
 - **AIバックエンドはベンダー非依存**: [opencode](https://github.com/anomalyco/opencode) のマルチプロバイダー対応(bring-your-own-provider)経由でモデルを切り替えられる
