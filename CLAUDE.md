@@ -29,6 +29,12 @@ packages/shared-types      共有の型・zodスキーマ                       
 
 `packages/agent-adapters`は削除済み(opencodeに完全委譲)。
 
+`apps/web`のUIは2026-09-02に「ダッシュボード/タスク詳細/承認キューを別ページ」から「左サイドバー(タスク一覧+
+承認キュー件数) + メイン(選択中タスクとの会話ビュー)」というチャット中心の1画面構成へ全面刷新した
+(Claude Code/claude.aiのような使用感を意図)。承認プロンプトも会話にインライン表示する。配色はopencode公式
+Web UIを実機調査した実測値ベース(docs/architecture.md 2.1節参照)。新規UIを追加する際もこのチャット中心の
+構成を踏襲し、別ページに機能を切り出す前にまず会話ビューへのインライン統合を検討すること。
+
 - `opencode serve`は`apps/web`(Next.js)の起動時に`instrumentation.ts`から子プロセスとして自動spawnする(別プロセス常駐にはしない)
 - `apps/mcp-proxmox`・`apps/mcp-tasks`は変更を最小限にし、opencodeの`opencode.json`の`mcp`設定から接続する
 - pnpm workspaceによるモノレポ構成。TypeScript strict モードを全パッケージで有効にする

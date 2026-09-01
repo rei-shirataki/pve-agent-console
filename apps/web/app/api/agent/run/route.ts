@@ -31,6 +31,7 @@ function resolveDefaultModel(): { providerID: string; modelID: string } {
 // session.status のみ扱う(docs/migration-plan.md Phase 0で確認した実際のイベント名に基づく。
 // SDKの型定義は一部実際のイベント名と一致しないため信用せず、実機確認済みの文字列で判定する)。
 const RELAYED_EVENT_TYPES = new Set([
+  "message.updated",
   "message.part.updated",
   "permission.asked",
   "permission.replied",

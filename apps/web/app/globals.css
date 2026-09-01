@@ -1,80 +1,150 @@
+/*
+ * 配色・フォントはopencode公式Web UI(`opencode web`)の実機から抽出した
+ * 実際のCSSカスタムプロパティを参考値にしている(推測ではなく実測。
+ * docs/architecture.md参照)。背景はほぼ黒、ブランドカラーはオレンジ、
+ * ボーダーは青みのないニュートラルグレー、フォントはInter。
+ */
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --border: #2a2f3a;
-  --text: #e6e8eb;
-  --muted: #9aa3af;
-  --accent: #5b9cf6;
-  --danger: #f76c6c;
+  --bg: #080808;
+  --bg-elevated: #121212;
+  --bg-weak: #191919;
+  --bg-stronger: #151515;
+  --bg-hover: #1c1c1c;
+
+  --border: #33322f;
+  --border-weak: #232323;
+  --border-strong: #4d4c4a;
+
+  --text: #ededed;
+  --text-base: #a0a0a0;
+  --text-weak: #707070;
+
+  --brand: #e27618;
+  --brand-hover: #f88524;
+  --accent: #3b5cf6;
+  --accent-text: #a2bcff;
+  --danger: #f17471;
   --warn: #f5c451;
-  --ok: #59d499;
+  --ok: #6bd586;
+
+  --sidebar-width: 260px;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Yu Gothic",
-    sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 a {
-  color: var(--accent);
-}
-
-.container {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 24px 20px 64px;
-}
-
-.nav {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.nav a {
+  color: var(--accent-text);
   text-decoration: none;
-  color: var(--text);
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--brand);
+  color: #0b0e13;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  cursor: pointer;
   font-weight: 600;
 }
-
-.nav .brand {
-  color: var(--accent);
-  margin-right: auto;
+button:hover {
+  background: var(--brand-hover);
+}
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+button.secondary:hover {
+  background: var(--bg-hover);
+}
+button.danger {
+  background: var(--danger);
+  color: #1a0505;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.card {
-  background: var(--panel);
+input,
+textarea,
+select {
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 18px;
-  margin-bottom: 14px;
+  border-radius: 6px;
+  padding: 7px 10px;
+  width: 100%;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-weak);
+  margin-bottom: 4px;
+}
+
+.field {
+  margin-bottom: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+.row > * {
+  flex: 1;
+}
+
+.muted {
+  color: var(--text-weak);
 }
 
 .badge {
   display: inline-block;
-  font-size: 12px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  color: var(--text-base);
 }
-
 .badge.type-incident {
   color: var(--danger);
   border-color: var(--danger);
 }
 .badge.type-change {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent);
 }
 .badge.type-maintenance {
@@ -90,104 +160,298 @@ a {
   border-color: var(--danger);
 }
 
-.muted {
-  color: var(--muted);
+/* --- アプリシェル(サイドバー + メイン) ------------------------------- */
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
+.sidebar {
+  width: var(--sidebar-width);
+  flex: 0 0 var(--sidebar-width);
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border-weak);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-button {
-  background: var(--accent);
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-weak);
+}
+.sidebar-brand .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--brand);
+  flex: 0 0 auto;
+}
+
+.sidebar-new-task {
+  margin: 12px 12px 4px;
+}
+.sidebar-new-task a {
+  display: block;
+  text-align: center;
+  background: var(--brand);
   color: #0b0e13;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-button.secondary {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-button.danger {
-  background: var(--danger);
-  color: #1a0505;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-input,
-textarea,
-select {
-  background: #0b0e13;
-  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
-  width: 100%;
+  font-weight: 600;
+  text-decoration: none;
+}
+.sidebar-new-task a:hover {
+  background: var(--brand-hover);
 }
 
-textarea {
-  min-height: 80px;
-  resize: vertical;
+.sidebar-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-weak);
+  padding: 14px 16px 6px;
 }
 
-label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.field {
-  margin-bottom: 12px;
-}
-
-.row {
-  display: flex;
-  gap: 10px;
-}
-
-.row > * {
+.sidebar-tasks {
   flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
 }
 
-.event-log {
-  background: #0b0e13;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  max-height: 420px;
+.sidebar-task {
+  display: block;
+  padding: 8px 16px;
+  border-left: 2px solid transparent;
+  color: var(--text-base);
+  text-decoration: none;
+}
+.sidebar-task:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.sidebar-task.active {
+  background: var(--bg-hover);
+  border-left-color: var(--brand);
+  color: var(--text);
+}
+.sidebar-task .title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-task .meta {
+  font-size: 11px;
+  color: var(--text-weak);
+  margin-top: 2px;
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--border-weak);
+  padding: 8px;
+}
+.sidebar-approvals-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px;
+  border-radius: 6px;
+  color: var(--text-base);
+  text-decoration: none;
+}
+.sidebar-approvals-link:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.sidebar-approvals-count {
+  background: var(--brand);
+  color: #0b0e13;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.app-main {
+  flex: 1;
   overflow-y: auto;
+  min-width: 0;
+}
+
+.app-main-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+}
+
+/* --- チャットビュー ---------------------------------------------------- */
+
+.chat-header {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 20px 20px 12px;
+  border-bottom: 1px solid var(--border-weak);
+  z-index: 1;
+}
+.chat-header h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.chat-header .badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-thread {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 20px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-entry {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+}
+
+.chat-bubble {
+  border-radius: 10px;
+  padding: 10px 13px;
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
 }
-
-.event-line {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px dashed var(--border);
+.chat-bubble.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #ffffff;
+  max-width: 80%;
+}
+.chat-bubble.agent-text {
+  align-self: flex-start;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-weak);
+  max-width: 80%;
+}
+.chat-bubble.agent-reasoning {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border-weak);
+  color: var(--text-weak);
+  font-size: 12px;
+  max-width: 80%;
+}
+.chat-bubble.comment {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border-weak);
+  color: var(--text-base);
+  max-width: 80%;
 }
 
-.event-line:last-child {
-  border-bottom: none;
+.chat-card {
+  align-self: flex-start;
+  width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-weak);
+  border-radius: 10px;
+  padding: 10px 13px;
+  font-size: 12px;
 }
-
-.event-line .kind {
-  color: var(--muted);
-  font-size: 11px;
+.chat-card .kind {
+  color: var(--text-weak);
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.chat-card code {
+  color: var(--text);
+}
+.chat-card pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-base);
+}
+
+.chat-card.permission {
+  border-color: var(--warn);
+}
+.chat-card.permission.decided {
+  border-color: var(--border-weak);
+}
+.chat-card.tool-error {
+  border-color: var(--danger);
+}
+
+.chat-meta {
+  font-size: 11px;
+  color: var(--text-weak);
+  align-self: flex-start;
+}
+
+/* --- コンポーザー ------------------------------------------------------- */
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border-weak);
+  padding: 12px 20px 20px;
+}
+.composer-inner {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.composer textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.composer-controls select {
+  width: auto;
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.composer-controls button {
+  margin-left: auto;
+}
+
+/* --- 汎用カード(承認キュー等の非チャットページ) -------------------------- */
+
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-weak);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.event-log {
+  background: var(--bg);
+  border: 1px solid var(--border-weak);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
 }

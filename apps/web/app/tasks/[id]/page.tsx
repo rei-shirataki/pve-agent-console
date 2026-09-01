@@ -4,8 +4,13 @@ import { getDb } from "@/lib/db";
 import { getOpencodeClient } from "@/lib/opencode-client";
 import { listPermissions } from "@/lib/opencode-permissions";
 import { resolveRiskTier } from "@/lib/opencode-config";
-import { TASK_TYPE_LABELS, TASK_STATUS_LABELS, TASK_PRIORITY_LABELS } from "@/lib/labels";
-import TaskDetailClient from "@/components/TaskDetailClient";
+import {
+  messagesToChatEntries,
+  auditLogToChatEntries,
+  commentsToChatEntries,
+  type ChatEntry,
+} from "@/lib/chat-entries";
+import TaskChatView from "@/components/TaskChatView";
 
 export const dynamic = "force-dynamic";
 
@@ -19,34 +24,34 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const comments = taskRepo.listComments(id);
   const auditLog = auditRepo.listByTask(id);
 
+  let history: ChatEntry[] = [...auditLogToChatEntries(auditLog), ...commentsToChatEntries(comments)];
   let pendingPermissions: { id: string; toolName: string; riskTier: "write" | "destructive" | null }[] = [];
+
   try {
-    const { baseUrl } = await getOpencodeClient();
+    const { client, baseUrl } = await getOpencodeClient();
+    if (task.opencodeSessionId) {
+      const messages = await client.session.messages({ path: { id: task.opencodeSessionId } });
+      if (messages.data) {
+        history = [...history, ...messagesToChatEntries(messages.data)];
+      }
+    }
     const all = await listPermissions(baseUrl);
     pendingPermissions = all
       .filter((p) => p.sessionID === task.opencodeSessionId)
       .map((p) => ({ id: p.id, toolName: p.permission, riskTier: resolveRiskTier(p.permission) }));
   } catch {
-    // opencode server起動直後などで取得できない場合はクライアント側のポーリングに任せる
+    // opencode server起動直後などで取得できない場合は空のまま表示し、クライアント側の操作に任せる
   }
 
-  return (
-    <>
-      <h1>{task.title}</h1>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-        <span className={`badge type-${task.type}`}>{TASK_TYPE_LABELS[task.type]}</span>
-        <span className="badge">{TASK_STATUS_LABELS[task.status]}</span>
-        <span className="badge">優先度: {TASK_PRIORITY_LABELS[task.priority]}</span>
-        {task.origin === "agent" && <span className="badge">エージェント起票</span>}
-      </div>
-      {task.description && <p>{task.description}</p>}
+  history.sort((a, b) => a.at.localeCompare(b.at));
 
-      <TaskDetailClient
-        task={task}
-        initialComments={comments}
-        initialPendingPermissions={pendingPermissions}
-        initialAuditLog={auditLog}
-      />
-    </>
-  );
+  // 現在保留中の承認は、対応するtool-callパートの履歴を厳密に相関させる代わりに、
+  // 末尾に「今まさに保留中」のカードとして追加する(承認待ち中にページを再読み込みしても
+  // 承認/却下ボタンが出るようにするため。docs/architecture.md参照)。
+  const now = new Date().toISOString();
+  for (const p of pendingPermissions) {
+    history.push({ kind: "permission", id: p.id, tool: p.toolName, status: "pending", at: now });
+  }
+
+  return <TaskChatView task={task} initialHistory={history} />;
 }
