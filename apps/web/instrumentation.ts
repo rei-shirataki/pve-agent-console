@@ -79,10 +79,13 @@ export async function register(): Promise<void> {
           const p = properties as PermissionRepliedProperties;
           const asked = pendingAsks.get(p.requestID);
           pendingAsks.delete(p.requestID);
+
+          // 削除前に読み取ること(先にdeleteすると常にundefinedになる、という
+          // 実機テストで踏んだ順序ミスがあった。docs/migration-plan.md Phase 5参照)
+          const args = asked ? (toolInputs.get(asked.callId) ?? null) : null;
           if (asked) toolInputs.delete(asked.callId);
 
           const task = taskRepo.getTaskByOpencodeSessionId(p.sessionID);
-          const args = asked ? (toolInputs.get(asked.callId) ?? null) : null;
 
           auditRepo.record({
             id: p.requestID,
