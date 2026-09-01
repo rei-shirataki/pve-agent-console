@@ -24,11 +24,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # apps/mcp-proxmox等のtypecheck/lintはpackages/shared-types・packages/dbの
+      # ビルド済み型宣言(dist/*.d.ts)に依存するため、必ずbuildを先に実行する
+      # (実機で再現・確認済み。ローカルではdist/が残っていて気づけなかった)
+      - name: Build
+        run: pnpm -r run build
+
       - name: Typecheck
         run: pnpm -r run typecheck
 
       - name: Lint
         run: pnpm exec eslint .
-
-      - name: Build
-        run: pnpm -r run build
