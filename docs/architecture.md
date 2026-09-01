@@ -12,18 +12,17 @@
 Proxmox VE運用に関するタスク(障害調査・構成変更・VM/LXCライフサイクル操作・監視/アラート設定・定期メンテナンス等)を、
 Web UI経由でAIエージェントに任せられるようにする。自宅Proxmox VE(LXC構成)を対象とし、就活ポートフォリオとしてGitHub公開する。
 
-### 実装状況(2026-09-01時点)
+### 実装状況(2026-09-02時点)
 
 opencode移行(Phase 0〜5)が完了し、実機で一気通貫の動作を確認済み([docs/migration-plan.md](migration-plan.md)参照)。
 `apps/web`の本番ビルド(`next start`)を実際に起動した状態で、タスク作成 → エージェント実行 → PVE write系ツール呼び出しで
 opencodeのpermissionにより自動ブロック → Web UIの承認API経由で承認 → 実際にツールが実行される → `audit_log`に決定が
 記録される、という流れをHTTP経由で確認済み(PVE本体は未接続のためツール実行自体は失敗するが、承認フロー・実行トリガー・
-監査記録はすべて正しく機能することを確認した)。
+監査記録はすべて正しく機能することを確認した)。`audit_log.arguments`が記録されない不具合も修正・再検証済み。
 
 未検証・既知の課題:
 - 実PVE環境への接続(引き続き未検証)
 - APIキー課金の実プロバイダー(Anthropic/OpenAI等)での動作確認(無料モデルopencode/big-pickleで代用確認)
-- `audit_log`の`arguments`列が記録されないケースがある(docs/migration-plan.md Phase 5参照)
 - `apps/web`に認証・アクセス制御なし(単一ユーザーのホームラボ用途として意図的に省略)
 
 ## 1. 全体構成(opencode採用後)
@@ -250,7 +249,6 @@ opencode Phase 0検証で判明・解決したこと(記録として残す):
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
 - 認証・アクセス制御は未実装(単一ユーザーのホームラボ用途を前提に省略。将来のセットアップウィザード導入時に
   セットで設計する。CLAUDE.md「将来的な拡張方針」参照)
-- `audit_log`の`arguments`列が記録されないケースがある(docs/migration-plan.md Phase 5参照)
 
 ### 実装時に行った判断
 
