@@ -89,6 +89,14 @@ Web UIを実機調査した実測値ベース(docs/architecture.md 2.1節参照)
 - Next.js(Turbopack)配下では`import.meta.resolve`のような動的ESM APIが`next build`は通っても`next start`実行時に
   壊れることがある(実例: docs/architecture.md「実装時に行った判断」参照)。ビルドが通ることと実際に動くことは別、
   という前提で`next start`まで実機確認すること
+- Next.js 16では`middleware.ts`ファイル規約が`proxy.ts`(エクスポート名も`proxy`)に置き換わっている
+  (`middleware.ts`は動くがdeprecated警告が出る)。Proxyはデフォルトで**Node.jsランタイム**で動く
+- **モジュールスコープの状態(Mapなどのシングルトン)はNext.jsのサーバーentry point(Route Handler /
+  `instrumentation.ts`)間で共有されない**(`next start`が複数ワーカープロセスを起動するため)。APIハンドラと
+  バックグラウンド処理の間で情報を受け渡す必要がある場合は、DBの行など複数プロセスから見える永続先を介すこと
+  (実例・詳細: docs/architecture.md 7節「実装時に行った判断」参照)
+- `pnpm --filter <pkg> run <script>`はそのパッケージのディレクトリをcwdとして実行するため、リポジトリルート
+  基準の相対パス(`DATABASE_PATH`等)を渡すと意図と違う場所にファイルができる。絶対パスを使うこと
 
 ## Git運用
 
@@ -115,5 +123,7 @@ community-scripts/ProxmoxVE のようなワンライナー(`bash -c "$(curl ...)
 - AIプロバイダー設定(opencodeのprovider/認証)
 - 管理者アカウント作成
 
-現状`apps/web`には認証機構がなく単一ユーザー前提のため、セットアップウィザードの実装は「認証・アクセス制御の導入」と
-セットで設計する必要がある(現時点では未着手・未設計)。
+認証機構(共有パスワード/Authentik OIDC)は2026-09-02に実装済み(docs/architecture.md 8節参照)。ただし
+現状の認証はユーザーDBを持たない単一ユーザー前提(共有パスワード1つ、またはAuthentik委譲)のため、
+「管理者アカウント作成」を含むセットアップウィザードを実装する場合は、そのアカウント管理をどう認証機構と
+統合するか(ユーザーDBを新設するか、Authentik前提に倒すか)を改めて設計する必要がある(現時点では未着手)。

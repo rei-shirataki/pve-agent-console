@@ -51,19 +51,23 @@ headless server(`opencode serve`)として担う。`apps/web`起動時に子プ�
 プロバイダーのAPIキーを設定してください。Claude Pro/Maxサブスクリプションのopencode経由利用は非公式のため
 オプトイン機能としてのみサポートします。詳細は[docs/adr/0001](docs/adr/0001-adopt-opencode.md))。
 
-> **セキュリティ上の注意**: `apps/web` には認証・アクセス制御を実装していません(単一ユーザーの
-> ホームラボ用途を前提としたスコープ判断。詳細は [docs/architecture.md](docs/architecture.md) 実装状況を参照)。
-> `next start` はデフォルトで全インターフェース(`0.0.0.0`)にバインドします。信頼できるLAN内でのみ
-> 動かし、インターネットへポート開放・リバースプロキシ公開は行わないでください。
+> **セキュリティ上の注意**: `apps/web` の認証は、`AUTHENTIK_*`(OIDC)が設定されていればAuthentikのみ、
+> `AUTH_PASSWORD`のみ設定されていれば共有パスワードでログインする最小構成です(単一ユーザーのホームラボ
+> 用途を前提としたスコープ判断。ユーザーDB・RBACは持ちません。詳細は [docs/architecture.md](docs/architecture.md)
+> 8節を参照)。どちらも未設定だと認証自体をスキップします。セッションCookieはデフォルトで`Secure`属性を
+> 付けません(`AUTH_COOKIE_SECURE=true`で有効化)。`next start` はデフォルトで全インターフェース(`0.0.0.0`)に
+> バインドします。信頼できるLAN内でのみ動かし、インターネットへポート開放・リバースプロキシ公開は
+> 行わないでください。
 
 ```bash
 pnpm install
 
-# .envを作成し、PVE接続情報・AIプロバイダーのAPIキーなどを埋める(.envはコミットされない)
+# .envを作成し、PVE接続情報・AIプロバイダーのAPIキー・認証情報などを埋める(.envはコミットされない)
 cp .env.example .env
 
-# 共有DBのマイグレーションを適用
-DATABASE_PATH=./data/pve-agent-console.db pnpm db:migrate
+# 共有DBのマイグレーションを適用(pnpm --filterはpackages/dbをcwdとして実行するため、
+# DATABASE_PATHは相対パスではなく絶対パスで指定すること)
+DATABASE_PATH="$(pwd)/data/pve-agent-console.db" pnpm db:migrate
 
 # 全パッケージをビルド
 pnpm build

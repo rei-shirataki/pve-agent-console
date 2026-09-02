@@ -455,3 +455,60 @@ label {
   overflow-y: auto;
   font-size: 12px;
 }
+
+.login-shell {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%;
+  max-width: 340px;
+}
+.login-card h1 {
+  font-size: 15px;
+  margin: 0 0 16px;
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.login-authentik {
+  display: block;
+  text-align: center;
+  margin-bottom: 12px;
+  background: var(--brand);
+  color: #0b0e13;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-weight: 600;
+}
+.login-authentik:hover {
+  background: var(--brand-hover);
+  text-decoration: none;
+}
+.login-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
+.sidebar-logout {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-weak);
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-logout:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
