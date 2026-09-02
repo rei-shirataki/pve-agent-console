@@ -263,8 +263,6 @@ opencode Phase 0検証で判明・解決したこと(記録として残す):
 - opencodeのバージョン追従方針(活発に開発中のOSSで、破壊的変更が起きうる。`package.json`で`1.18.25`に固定済みだが、
   更新時は都度Phase 0相当の実機確認が必要)
 - ライセンス選定(現状README/LICENSEはMITを仮置き。変更の余地あり)
-- 認証・アクセス制御は未実装(単一ユーザーのホームラボ用途を前提に省略。将来のセットアップウィザード導入時に
-  セットで設計する。CLAUDE.md「将来的な拡張方針」参照)
 
 ### 実装時に行った判断
 
@@ -283,3 +281,64 @@ opencode Phase 0検証で判明・解決したこと(記録として残す):
   判明した。`process.cwd()`起点の`node_modules`探索に切り替えて解決した(`apps/web/lib/opencode-server.ts`参照)。
   Next.js(Turbopack)配下では`import.meta.resolve`のようなあまり一般的でない動的ESM APIは、ビルド後の実際の
   起動まで確認しないと壊れていることに気づけない、という教訓
+- Next.js 16で`middleware.ts`ファイル規約は非推奨化され`proxy.ts`(エクスポート名も`middleware`→`proxy`)に
+  置き換わっている。実機確認済み(`npx @next/codemod@canary middleware-to-proxy .`で機械的に移行可能だが、
+  本リポジトリでは未コミット差分があり自動実行を見送り手動で移行した)。Proxyはデフォルトで**Node.jsランタイム**
+  で動作するため(v16.0.0以降)、以前のEdgeランタイム前提でWeb Crypto APIを使う設計は不要になり、認証の
+  署名処理は素直にNode組み込みの`crypto`モジュールで実装している(`apps/web/lib/auth/*.ts`参照)
+- **モジュールスコープの状態(`Map`等のシングルトン)は、Next.jsのサーバーentry point(Route Handler /
+  `instrumentation.ts`)間で共有されない。** 認証者(誰が承認したか)をAPIハンドラからバックグラウンドの
+  イベント購読処理(`instrumentation.ts`)へ相関Mapで受け渡す設計を最初に実装したが、実機で
+  「APIハンドラ側`decidedByHints.set()`直後は`size=1`」「同じ`requestID`をバックグラウンド購読側で
+  読むと`size=0`」という食い違いを観測した。`next start`が複数ワーカープロセスを起動し(`opencode serve`が
+  起動のたびに2回スポーンされ2回目がポート衝突でクラッシュする、という無関係に見えた現象も同じ原因だと
+  `proxy.ts`を取り除いても再現することで切り分けた)、各ワーカーが個別に`instrumentation.ts`の`register()`を
+  実行するため、と考えられる。**対策**: プロセス間で共有されるDB(SQLite)の行そのものを介して情報を受け渡す
+  設計に変更した。`POST /api/permissions/[id]/reply`がopencodeへ転送する**前**に`audit_log`へ承認者入りの
+  行を先行INSERTし(この順序ならopencode側の`permission.replied`イベントより必ず先に完了する)、
+  バックグラウンド購読側は`arguments`(実引数。`GET /permission`のmetadataには含まれず、
+  `message.part.updated`のcallID相関でしか取得できないことも実機確認済み)と正確な`askedAt`だけを
+  後から`AuditLogRepository.applyCorrections()`で補正する。`record()`自体は`onConflictDoNothing`の
+  ままなので、どちらが先に書いても壊れない(`packages/db/src/audit-log-repository.ts`参照)
+- `pnpm --filter <pkg> run <script>`はスクリプトをそのパッケージのディレクトリをcwdとして実行する。
+  リポジトリルート基準の相対パス(例: `DATABASE_PATH=./data/...`)をこの形で渡すと、意図と異なるディレクトリ
+  (例: `packages/db/data/...`)にファイルが作られる。DBパス等を相対指定する場合は実行元のcwdに注意するか、
+  絶対パスを使うこと
+
+## 8. 認証・アクセス制御(2026-09-02実装)
+
+単一ユーザー・LAN限定のホームラボ用途を前提に、最小構成の認証を追加した(ユーザーテーブル・登録・
+パスワードリセット・RBACは作らない)。
+
+- **Authentik(OIDC Authorization Code + PKCE)を自前実装**。`AUTHENTIK_ISSUER`/`AUTHENTIK_CLIENT_ID`/
+  `AUTHENTIK_CLIENT_SECRET`/`AUTHENTIK_REDIRECT_URI`が揃っていればAuthentikのみでログインする
+  (`apps/web/lib/auth/oidc.ts`)。discoveryドキュメント(`/.well-known/openid-configuration`)経由で
+  authorization/token/jwks各エンドポイントを解決し、Authentik固有のパス規約を決め打ちしない
+- 未設定の場合は`AUTH_PASSWORD`による共有パスワード認証にフォールバックする(`apps/web/lib/auth/password.ts`。
+  定数時間比較のためSHA-256でハッシュ化してから`crypto.timingSafeEqual`)
+- どちらも未設定なら認証自体をスキップする(ローカル動作確認の利便性を優先)。起動時に`instrumentation.ts`が
+  警告ログを出す。認証を有効にする(`AUTH_PASSWORD`か`AUTHENTIK_*`のいずれかを設定する)のに`AUTH_SECRET`
+  (セッションCookie署名鍵)が未設定の場合は起動時に例外で落とす(fail-closed。CLAUDE.mdの原則1参照)
+- セッションは`apps/web/proxy.ts`(旧middleware。7節参照)が検証する自己完結型の署名Cookie(`pve_session`)。
+  ペイロード`{u: ユーザー識別子, exp: 失効unix秒}`をHMAC-SHA256(`AUTH_SECRET`)で署名する
+  (`apps/web/lib/auth/signed-cookie.ts`)。ユーザーDBもサーバー側セッションストアも持たない
+- Proxyは`/api/*`には401 JSONを、それ以外には`/login`への302リダイレクトを返す。これを分けているのは、
+  チャットビューが`/api/permissions`等を数秒間隔でポーリングしており、セッション切れ時にHTMLのログインページを
+  JSONとして`res.json()`しようとして無言で失敗する(UIが固まって見える)事故を避けるため。クライアント側の
+  ポーリング・SSE読み取り箇所(`Sidebar.tsx`/`TaskChatView.tsx`)は401を検知したら`/login`へ遷移する
+- `/login`はroute group `app/(app)/`の外に置いている。ルートレイアウトに直接ぶら下げることで、未認証状態で
+  サイドバー(タスク一覧・ログアウトボタン)が見えてしまう問題を避けた(実機のブラウザ操作で発見・修正)
+- `audit_log.decided_by`には実際にログインしているユーザー識別子(Authentikの`preferred_username`、
+  共有パスワード時は`AUTH_USER_LABEL`)を記録する。この書き込み方式の設計変更(モジュールスコープの
+  相関Mapが複数ワーカー間で共有されないと判明したための2段階DB書き込みへの変更)は7節「実装時に行った判断」参照
+- セッションCookieは`AUTH_COOKIE_SECURE=true`を明示しない限り`Secure`属性を付けない(デフォルトfalse)。
+  LAN内の素のHTTPで動かす前提(README「セキュリティ上の注意」参照)のため、HTTPS配下で運用する場合のみ
+  明示的に有効化する設計にしている
+- OIDCフロー全体(`/api/auth/oidc/start`のdiscovery取得・PKCE生成・authorize URL構築・state Cookie発行から、
+  `/api/auth/oidc/callback`のstate検証・トークン交換・id_token署名検証(JWKS)・`preferred_username`抽出・
+  セッションCookie発行まで)は、discovery/token/jwksを提供する簡易モックIdP(RSA鍵ペアで自己署名したid_tokenを
+  返す)を用いて実サーバーに対しcurlで一気通貫検証済み。ただし**実際のAuthentikインスタンスに対しては
+  未検証**(開発環境に実インスタンスが無いため)。標準のOIDC discoveryドキュメント経由でエンドポイントを
+  解決する設計にしているため、Authentik固有の実装差異によるリスクは小さいと考えているが、初回導入時は
+  実機での動作確認を推奨する
+  共有パスワード経路は未認証→ログイン→認証済み→ログアウトまで実機ブラウザで一気通貫検証済み

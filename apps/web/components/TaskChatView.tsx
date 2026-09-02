@@ -157,7 +157,13 @@ export default function TaskChatView({ task, initialHistory }: Props) {
   useEffect(() => {
     const timer = setInterval(() => {
       fetch(`/api/permissions?taskId=${task.id}`)
-        .then((res) => (res.ok ? (res.json() as Promise<{ id: string }[]>) : null))
+        .then((res) => {
+          if (res.status === 401) {
+            window.location.href = "/login";
+            return null;
+          }
+          return res.ok ? (res.json() as Promise<{ id: string }[]>) : null;
+        })
         .then((data) => {
           if (!data) return;
           const stillPendingIds = new Set(data.map((p) => p.id));
@@ -186,6 +192,10 @@ export default function TaskChatView({ task, initialHistory }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ taskId: task.id, prompt: promptText, agent }),
       });
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
       if (!res.ok || !res.body) throw new Error(`agent run failed to start: ${res.status}`);
 
       const reader = res.body.getReader();

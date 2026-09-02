@@ -21,7 +21,13 @@ export default function Sidebar({ initialTasks, initialPendingCount }: Props) {
   useEffect(() => {
     const timer = setInterval(() => {
       fetch("/api/tasks")
-        .then((res) => (res.ok ? (res.json() as Promise<Task[]>) : null))
+        .then((res) => {
+          if (res.status === 401) {
+            window.location.href = "/login";
+            return null;
+          }
+          return res.ok ? (res.json() as Promise<Task[]>) : null;
+        })
         .then((data) => {
           if (data) setTasks(data);
         })
@@ -39,6 +45,11 @@ export default function Sidebar({ initialTasks, initialPendingCount }: Props) {
     }, POLL_MS);
     return () => clearInterval(timer);
   }, []);
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
 
   const sorted = [...tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
@@ -73,6 +84,9 @@ export default function Sidebar({ initialTasks, initialPendingCount }: Props) {
           <span>承認キュー</span>
           {pendingCount > 0 && <span className="sidebar-approvals-count">{pendingCount}</span>}
         </Link>
+        <button className="sidebar-logout" onClick={() => void logout()}>
+          ログアウト
+        </button>
       </div>
     </aside>
   );
